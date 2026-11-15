@@ -22,6 +22,11 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 - Renovação soma dias ao vencimento atual. Corte começa em **modo simulação** até o Talyson ligar.
 - Fluxo de conversa: `docs/fluxo-bot.md` (v1 aprovada pelo Talyson em 15/11).
 
+## Endereços (domínio botlybrasil.tech)
+- `painel.botlybrasil.tech` painel das contas · `admin.botlybrasil.tech` super admin · `api.botlybrasil.tech` webhooks (Telegram e gateways).
+- Raiz `botlybrasil.tech`: landing page de vendas com SEO (para vender o Botly a donos de canais), com um painel próprio isolado em algo como `/admin-pv`. **Fica para depois**: primeiro o sistema funcionando.
+- VPS própria do Botly na Hostinger com Easypanel (separada da VPS da MIA). IP: 191.96.1.178.
+
 ## Migração do AutomatizzeBot (app.automatizzebot.com.br)
 - Conta do Talyson tem 8 bots (4346 @tophotfreebot é teste antigo, fica fora).
 - Tela `/bots/subscriptions/{botId}` tem botão de exportar (ícone ao lado de BUSCAR) → `assinantes.xlsx` (`?search_payment_status=approved&export=1`). Colunas: usuário/ID, ID pagamento, valor, assinatura (código + Ativa/Expirada), compra, vencimento.
@@ -39,6 +44,18 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 - Commits em português, terminando com as linhas de atribuição pedidas pela sessão.
 - Nunca pedir chaves/tokens no chat (ficam nas variáveis do Easypanel ou no painel).
 - Perguntar quando houver dúvida de regra de negócio.
+
+## O que já existe
+- `src/bot/handlers.ts`: conversa completa (maioridade, boas-vindas com mídia/prévias, planos, pacotes, order bump, Pix com QR + copia e cola, Já paguei, Gerar outro Pix em outro gateway, /meuplano, pedido de entrada aprovado só pelo bot gestor, bot promovido a admin → canal cadastrado sozinho).
+- `src/domain/sales.ts`: pedido, Pix com reserva de gateway, `markChargePaid` (não duplica; extra vence junto com o plano; renovação soma).
+- `src/api/server.ts`: `/tg/:botId` (confere o segredo do Telegram) e `/pay/:provider/:gatewayId?token=` (sempre confere na API do gateway).
+- `src/jobs/ticks.ts`: conferência de Pix pendentes a cada minuto (PushinPay a cada 5 min por cobrança), por 24 h.
+- `src/cli/setup.ts`: configuração pelo Console do Easypanel enquanto o painel não existe (conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, listar).
+- Testes: `test/flow.test.ts` (Telegram e PushinPay simulados, fluxo inteiro).
+
+## Ainda falta (próximas etapas)
+- Painel web (bots, canais, planos, pacotes, gateways, clientes, retenção, lembretes, dashboard) e super admin.
+- Lembretes de vencimento, corte (simulação primeiro), recuperação de Pix, oferta pós-venda, importação.
 
 ## A validar
 - Split da PushinPay (campo de divisão no cashIn): conferir na documentação antes de ligar a taxa.
