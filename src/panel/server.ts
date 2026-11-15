@@ -14,6 +14,7 @@ import { apiForToken } from "../bot/api.js";
 import { botToken } from "../bot/runtime.js";
 import type { Transformer } from "grammy";
 import { gatewayClient } from "../payments/gateway.js";
+import { dashboard, type RangeKey } from "./dashboard.js";
 import { analyze, applyImport, readSheet, suggestPlans } from "../domain/importer.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { hashPassword, LoginLimiter, newToken, passwordProblem, tokenHash, verifyPassword } from "./auth.js";
@@ -207,6 +208,13 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
         routing: bots.some((b) => b.routing.gatewayIds.length > 0),
       },
     };
+  });
+
+  app.get<{ Querystring: { range?: string; from?: string; to?: string } }>("/api/dashboard", async (req) => {
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
+    const keys: RangeKey[] = ["today", "yesterday", "7d", "week", "month", "30d", "all", "custom"];
+    const key = (keys as string[]).includes(req.query.range ?? "") ? (req.query.range as RangeKey) : "7d";
+    return dashboard(db, a.id, ctx.now(), a.settings.timezone ?? DEFAULT_TZ, key, { from: req.query.from, to: req.query.to });
   });
 
   // ─── Bots ───

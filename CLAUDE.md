@@ -57,11 +57,13 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 - Importação (`src/domain/importer.ts` + página Importar assinantes): lê .xlsx/.csv (colunas reconhecidas pelo nome ou conteúdo; ID = último número de 5+ dígitos da célula; data sem hora = 23:59 no fuso), agrupa por cliente (maior vencimento; valor/duração da compra mais recente), grupos valor+duração → plano do bot (sugestão automática), grava clientes (imported, funil "paid"), vínculo com o bot e acesso (ativo ou removido); nunca encurta vencimento existente; já monta os lembretes.
 - Mídia por upload (tabela `media`, bytea): POST /api/media (corpo binário; foto JPG/PNG/WEBP até 10 MB, vídeo MP4/MOV e GIF até 50 MB = limites do Telegram); boas-vindas guarda `mediaId` e o bot sobe o arquivo no 1º /start e passa a usar o file_id.
 - Deploy: os dois serviços (botly e painel) implantam pelo mesmo push; em 15/11 falharam juntos em 0 s ("### Error" sem detalhe). Se repetir, implantar um de cada vez.
+- Dashboard (Início, `src/panel/dashboard.ts`, GET /api/dashboard?range=today|yesterday|7d|week|month|30d|all|custom&from&to): faturamento, vendas (novas/renovações/pacotes), ticket médio, conversão (/start → compra), Pix pago/gerado, renovação (renovou ÷ renovou+perdeu), upsell (bump aceito/oferecido, receita de extras, renovação com extra), pacotes (qtd, receita, % do faturamento); comparação com o período anterior; gráfico diário empilhado (mensal acima de 95 dias) com dica e tabela; funil; projeções (renovações em 30 dias × taxa dos últimos 30 dias; ritmo do mês); ranking de bots e planos. Cores das séries validadas (skill dataviz): #5B2EFF novas, #0E9F86 renovações, #D98A00 pacotes.
+- Nome de exibição do canal (`channels.display_name`, `chName()`): usado em todas as mensagens do bot; título do Telegram fica discreto.
 - Testes: `test/flow.test.ts` (Telegram e PushinPay simulados, fluxo inteiro), `test/panel.test.ts` (API do painel) e `test/retention.test.ts` (fila, envio, renovação pelo botão, corte simulado/real, volte com desconto).
 
 ## Ainda falta (próximas etapas)
-Ordem combinada: 1) ✅ lembretes + corte (simulação) + página Retenção; 2) ✅ importação do AutomatizzeBot (falta: leads/usuários que nunca compraram); 3) Clientes + Dashboard; 4) recuperação de Pix + oferta pós-venda.
-- Painel: Clientes, Dashboard completo (gráficos, ranking), upload de mídia, super admin.
+Ordem combinada: 1) ✅ lembretes + corte (simulação) + página Retenção; 2) ✅ importação do AutomatizzeBot (falta: leads/usuários que nunca compraram); 3) ✅ Dashboard, falta Clientes; 4) recuperação de Pix + oferta pós-venda.
+- Painel: Clientes, super admin.
 - Recuperação de Pix, oferta pós-venda, importação de leads (quem nunca comprou).
 
 ## Confirmado em produção
