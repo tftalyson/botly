@@ -667,6 +667,17 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     };
   });
 
+  /** Manda de novo uma mensagem que falhou (volta para a fila). */
+  app.post<{ Params: { id: string } }>("/api/retention/:id/retry", async (req) => {
+    const [row] = await db
+      .update(s.outbox)
+      .set({ status: "scheduled", error: null, scheduledFor: ctx.now() })
+      .where(and(eq(s.outbox.id, req.params.id), eq(s.outbox.accountId, acc(req)), eq(s.outbox.status, "failed")))
+      .returning();
+    if (!row) throw notFound("Mensagem com falha");
+    return { ok: true };
+  });
+
   app.post("/api/retention/refresh", async (req) => {
     await planOutbox(ctx, acc(req));
     return { ok: true };

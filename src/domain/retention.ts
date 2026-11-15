@@ -208,8 +208,13 @@ export async function sendDue(ctx: Ctx, rt: BotlyRuntime, limit = 40) {
       await logEvent(ctx, { accountId: o.accountId, botId: bot.id, customerId: o.customerId, type: t.kind === "winback" ? "winback_sent" : "reminder_sent", meta: { outboxId: o.id, accessId: a.id } });
       await new Promise((r) => setTimeout(r, 60)); // folga para o limite do Telegram
     } catch (err) {
-      ctx.log.warn({ outboxId: o.id, err: String(err) }, "falha ao enviar lembrete");
-      await ctx.db.update(s.outbox).set({ status: "failed", error: String(err).slice(0, 300) }).where(eq(s.outbox.id, o.id));
+      const msg = String(err);
+      ctx.log.warn({ outboxId: o.id, err: msg }, "falha ao enviar lembrete");
+      // Falha de rede (o Telegram não respondeu): tenta de novo na próxima rodada, até 5 vezes.
+      const tries = Number(o.error?.match(/tentativa (\d+)/)?.[1] ?? 0) + 1;
+      if (/Network request|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|429|Too Many Requests|5\d\d/i.test(msg) && tries < 5) {
+        await ctx.db.update(s.outbox).set({ error: `falha de rede, tentativa ${tries}` }).where(eq(s.outbox.id, o.id));
+      } else await ctx.db.update(s.outbox).set({ status: "failed", error: msg.slice(0, 300) }).where(eq(s.outbox.id, o.id));
     }
   }
 }

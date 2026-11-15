@@ -35,6 +35,15 @@ const RANGES: [Range, string][] = [
 const fmt = (iso: string | null, withTime = false) =>
   iso ? new Date(iso).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}) }) : "vitalício";
 
+/** Explica o erro em palavras simples. */
+function errorText(e: string | null) {
+  if (!e) return "";
+  if (/bloqueou/i.test(e)) return "o cliente bloqueou o bot";
+  if (/Network request|rede/i.test(e)) return "o Telegram não respondeu na hora (falha de conexão)";
+  if (/chat not found/i.test(e)) return "o cliente nunca abriu este bot";
+  return e;
+}
+
 function whichMsg(i: Item) {
   if (i.days == null) return "Mensagem";
   if (i.kind === "winback") return `Volte (${i.days}d depois${i.discountPct ? `, ${i.discountPct}% off` : ""})`;
@@ -46,7 +55,7 @@ function StatusChip({ i }: { i: Item }) {
   if (i.outcome === "renewed") return <span className="chip ok">Renovou</span>;
   if (i.status === "sent") return <span className="chip plain">Enviado</span>;
   if (i.status === "scheduled") return <span className="chip">Agendado {fmt(i.when, true).split(" ")[1] ?? ""}</span>;
-  if (i.status === "failed") return <span className="chip bad" title={i.error ?? ""}>Falhou</span>;
+  if (i.status === "failed") return <span className="chip bad">Falhou</span>;
   return (
     <span className="chip plain" title={i.error ?? ""}>
       Não enviado{i.error ? `: ${i.error}` : ""}
@@ -122,6 +131,12 @@ export function RetentionPage() {
                 </div>
                 <b>{brl(i.expectedCents)}</b>
                 <StatusChip i={i} />
+                {i.status === "failed" && (
+                  <button className="btn small" disabled={busy} onClick={() => run(() => post(`/api/retention/${i.id}/retry`).then(d.reload), "Mensagem na fila de novo: sai em até 1 minuto")}>
+                    Tentar de novo
+                  </button>
+                )}
+                {i.status === "failed" && i.error && <div className="small error-text" style={{ flexBasis: "100%" }}>Motivo: {errorText(i.error)}</div>}
               </div>
             ))}
           </div>
