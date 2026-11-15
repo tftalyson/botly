@@ -20,13 +20,16 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 - Recuperação de Pix: 15 min lembrete; 2 h 10% off; 24 h plano mais barato ou pacote.
 - Gateway: começar com **PushinPay** (aceita conteúdo adulto). Rotação: fixed | alternar | equilibrar | limite, com reserva automática se der erro.
 - Renovação soma dias ao vencimento atual. Corte começa em **modo simulação** até o Talyson ligar.
-- Fluxo de conversa: `docs/fluxo-bot.md` (proposta v1, aguardando aprovação).
+- Fluxo de conversa: `docs/fluxo-bot.md` (v1 aprovada pelo Talyson em 15/11).
 
 ## Migração do AutomatizzeBot (app.automatizzebot.com.br)
 - Conta do Talyson tem 8 bots (4346 @tophotfreebot é teste antigo, fica fora).
 - Tela `/bots/subscriptions/{botId}` tem botão de exportar (ícone ao lado de BUSCAR) → `assinantes.xlsx` (`?search_payment_status=approved&export=1`). Colunas: usuário/ID, ID pagamento, valor, assinatura (código + Ativa/Expirada), compra, vencimento.
 - Mesmo cliente aparece uma vez por compra: ficar com o maior vencimento por cliente + canal.
-- @topflixvipsbot e @LunaMineira_Bot vendem o mesmo canal.
+- Canais VIP (só estes 5): Top Hotwifes Brasil, Xcornos (amadores), TopFlixVip, Top Trans Brasil, Top Blacks (Negonas).
+  Links diferentes no AutomatizzeBot podem ser do mesmo canal. Mapa provável: @TopHotwifes_bot → Top Hotwifes;
+  @xcornos_bot e @cornos_brbot → Xcornos; @topflixvipsbot e @LunaMineira_Bot → TopFlixVip; @TopTransBRBot → Top Trans;
+  TopBlacksBot → Top Blacks. Confirmar pelo ID do canal no cadastro.
 - Usuários/leads (`/bots/sessions/{botId}`) não têm exportação; dá para ler as páginas (HTML do servidor).
 - Virada: exportar no dia, usar o MESMO token dos bots, desligar o AutomatizzeBot e revogar os links fixos antigos dos canais.
 
