@@ -6,6 +6,7 @@
 //   bump:y|n:<pedidoId>    aceitou/recusou o extra antes do Pix
 //   chk:<cobrancaId>       "Já paguei"
 //   new:<pedidoId>         "Gerar outro Pix" (outro gateway primeiro)
+import { chName } from "../domain/channel-name.js";
 import { and, asc, eq, gt, inArray, desc } from "drizzle-orm";
 import { InlineKeyboard, InputFile, type Bot, type Context } from "grammy";
 import QRCode from "qrcode";
@@ -142,11 +143,11 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       const acc = await activeAccess(ctx, customer.id, L.main.id);
       if (acc) {
         const kb = new InlineKeyboard().text("🔄 Renovar agora", "plans").row();
-        if (L.main.inviteLink) kb.url(`🔗 Entrar no ${L.main.title}`, L.main.inviteLink).row();
+        if (L.main.inviteLink) kb.url(`🔗 Entrar no ${chName(L.main)}`, L.main.inviteLink).row();
         await c.reply(
           acc.expiresAt
-            ? `✅ Seu acesso ao <b>${esc(L.main.title)}</b> está ativo até <b>${fmtDate(acc.expiresAt, L.tz)}</b>.`
-            : `✅ Seu acesso ao <b>${esc(L.main.title)}</b> é <b>vitalício</b>.`,
+            ? `✅ Seu acesso ao <b>${esc(chName(L.main))}</b> está ativo até <b>${fmtDate(acc.expiresAt, L.tz)}</b>.`
+            : `✅ Seu acesso ao <b>${esc(chName(L.main))}</b> é <b>vitalício</b>.`,
           { parse_mode: "HTML", reply_markup: kb },
         );
         return;
@@ -267,7 +268,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "bump_offered", meta: { channelId: bump.channel.id, orderId: order.id } });
       await show(
         c,
-        `Você escolheu <b>${esc(plan.name)} — ${brl(plan.priceCents)}</b>.\n\n➕ Quer adicionar o canal <b>${esc(bump.channel.title)}</b> por só <b>+${brl(bump.priceCents)}</b>?\n<i>(vence junto com o seu plano)</i>`,
+        `Você escolheu <b>${esc(plan.name)} — ${brl(plan.priceCents)}</b>.\n\n➕ Quer adicionar o canal <b>${esc(chName(bump.channel))}</b> por só <b>+${brl(bump.priceCents)}</b>?\n<i>(vence junto com o seu plano)</i>`,
         new InlineKeyboard()
           .text(`✅ Sim, adicionar (total ${brl(plan.priceCents + bump.priceCents)})`, `bump:y:${order.id}`)
           .row()
@@ -291,7 +292,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       const extra: OrderItem = {
         type: "extra",
         refId: bump.channel.id,
-        name: bump.channel.title,
+        name: chName(bump.channel),
         channelIds: [bump.channel.id],
         durationUnit: main.durationUnit,
         durationValue: main.durationValue,
@@ -467,7 +468,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     if (opts.withExtra && ren?.enabled && ren.extraChannelId && !(await activeAccess(ctx, customer.id, ren.extraChannelId))) {
       const ch = (await ctx.db.select().from(s.channels).where(and(eq(s.channels.id, ren.extraChannelId), eq(s.channels.active, true))))[0];
       const price = L.bot.upsell.orderBump?.priceOverrides?.[ren.extraChannelId] ?? ch?.extraPriceCents;
-      if (ch && price) items.push({ type: "extra", refId: ch.id, name: ch.title, channelIds: [ch.id], durationUnit: plan.durationUnit, durationValue: plan.durationValue, priceCents: price });
+      if (ch && price) items.push({ type: "extra", refId: ch.id, name: chName(ch), channelIds: [ch.id], durationUnit: plan.durationUnit, durationValue: plan.durationValue, priceCents: price });
     }
     const subtotal = items.reduce((x, i) => x + i.priceCents, 0);
     const discountCents = opts.discountPct ? Math.round((plan.priceCents * opts.discountPct) / 100) : 0;
@@ -515,8 +516,8 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       return;
     }
     const kb = new InlineKeyboard();
-    const lines = active.map((r) => `• <b>${esc(r.ch.title)}</b> — ${r.a.expiresAt ? `até ${fmtDate(r.a.expiresAt, L.tz)}` : "vitalício"}`);
-    for (const r of active) if (r.ch.inviteLink) kb.url(`🔓 Entrar no ${r.ch.title}`, r.ch.inviteLink).row();
+    const lines = active.map((r) => `• <b>${esc(chName(r.ch))}</b> — ${r.a.expiresAt ? `até ${fmtDate(r.a.expiresAt, L.tz)}` : "vitalício"}`);
+    for (const r of active) if (r.ch.inviteLink) kb.url(`🔓 Entrar no ${chName(r.ch)}`, r.ch.inviteLink).row();
     kb.text("🔄 Renovar", "plans");
     await show(c, `📋 <b>Suas assinaturas:</b>\n${lines.join("\n")}`, kb);
   }
@@ -547,7 +548,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     if (customer) await logEvent(ctx, { accountId: row.accountId, botId, customerId: customer.id, type: "join_declined", meta: { channelId: channel.id } });
     // O pedido permite mandar uma mensagem à pessoa mesmo sem /start.
     await c.api
-      .sendMessage(req.user_chat_id, `Para entrar no <b>${esc(channel.title)}</b> você precisa de um plano ativo.`, {
+      .sendMessage(req.user_chat_id, `Para entrar no <b>${esc(chName(channel))}</b> você precisa de um plano ativo.`, {
         parse_mode: "HTML",
         reply_markup: new InlineKeyboard().url("💎 Ver planos", `https://t.me/${row.username}?start=entrada`),
       })

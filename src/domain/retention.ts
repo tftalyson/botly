@@ -5,6 +5,7 @@
 // 2) sendDue: manda o que já está na hora, pelo bot da última compra.
 // 3) cutExpired: vencidos além da tolerância viram "expired"; com o corte ligado,
 //    são removidos do canal (bane e desbane). Desligado = modo simulação.
+import { chName } from "./channel-name.js";
 import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { InlineKeyboard } from "grammy";
 import * as s from "../db/schema.js";
@@ -117,7 +118,7 @@ async function buttons(ctx: Ctx, bot: typeof s.bots.$inferSelect, a: Access, t: 
   if (r?.enabled && r.extraChannelId && r.extraChannelId !== a.channelId && !(await activeAccess(ctx, a.customerId, r.extraChannelId))) {
     const ch = (await ctx.db.select().from(s.channels).where(eq(s.channels.id, r.extraChannelId)))[0];
     const extra = bot.upsell.orderBump?.priceOverrides?.[r.extraChannelId] ?? ch?.extraPriceCents;
-    if (ch?.active && ch.inviteLink && extra) kb.text(`⭐ Renovar + ${ch.title} — ${brl(priceCents + extra)}`, `rnx:${a.id}`).row();
+    if (ch?.active && ch.inviteLink && extra) kb.text(`⭐ Renovar + ${chName(ch)} — ${brl(priceCents + extra)}`, `rnx:${a.id}`).row();
   }
   if (r?.enabled && r.longPlanId && r.longPlanId !== a.planId) {
     const lp = (await ctx.db.select().from(s.plans).where(and(eq(s.plans.id, r.longPlanId), eq(s.plans.active, true))))[0];
@@ -180,7 +181,7 @@ export async function sendDue(ctx: Ctx, rt: BotlyRuntime, limit = 40) {
       const daysLeft = Math.max(0, Math.ceil((a.expiresAt!.getTime() - now.getTime()) / 86_400_000));
       const text = fillTemplate(t.text, {
         nome: esc(customer.firstName || customer.username || ""),
-        canal: esc(ch.title),
+        canal: esc(chName(ch)),
         vencimento: fmtDate(a.expiresAt, tz),
         dias: String(daysLeft),
         valor: brl(t.discountPct ? discounted(price, t.discountPct) : price),
@@ -271,7 +272,7 @@ export async function retentionWindow(ctx: Ctx, accountId: string, from: Date, t
       offset: s.templates.offsetMinutes,
       discountPct: s.templates.discountPct,
       customer: { id: s.customers.id, tg: s.customers.telegramUserId, username: s.customers.username, firstName: s.customers.firstName },
-      channel: s.channels.title,
+      channel: sql<string>`coalesce(${s.channels.displayName}, ${s.channels.title})`,
       expiresAt: s.accesses.expiresAt,
       bot: s.bots.username,
     })
@@ -288,7 +289,7 @@ export async function retentionWindow(ctx: Ctx, accountId: string, from: Date, t
 /** Vencidos esperando remoção (modo simulação mostra estes). */
 export async function pendingRemovals(ctx: Ctx, accountId: string) {
   return ctx.db
-    .select({ id: s.accesses.id, expiresAt: s.accesses.expiresAt, channel: s.channels.title, username: s.customers.username, firstName: s.customers.firstName, tg: s.customers.telegramUserId })
+    .select({ id: s.accesses.id, expiresAt: s.accesses.expiresAt, channel: sql<string>`coalesce(${s.channels.displayName}, ${s.channels.title})`, username: s.customers.username, firstName: s.customers.firstName, tg: s.customers.telegramUserId })
     .from(s.accesses)
     .innerJoin(s.channels, eq(s.channels.id, s.accesses.channelId))
     .innerJoin(s.customers, eq(s.customers.id, s.accesses.customerId))

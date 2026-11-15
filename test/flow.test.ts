@@ -118,7 +118,7 @@ describe("venda completa", () => {
     expect(pub.rights.ok).toBe(false);
     await db.delete(s.channels).where(eq(s.channels.id, pub.channel.id));
     const { channel: extra } = await registerChannel(ctx, b, api, EXTRA);
-    await db.update(s.channels).set({ extraPriceCents: 990 }).where(eq(s.channels.id, extra.id));
+    await db.update(s.channels).set({ extraPriceCents: 990, displayName: "VIP Trans Brasil" }).where(eq(s.channels.id, extra.id));
     const [p] = await db.insert(s.plans).values({ accountId, botId, name: "Mensal", durationUnit: "month", durationValue: 1, priceCents: 2490 }).returning();
     planId = p!.id;
     await db
@@ -143,7 +143,7 @@ describe("venda completa", () => {
     expect(lastText()).toContain("Escolha seu plano");
     expect(sent("editMessageText").length).toBe(edits); // nova mensagem, histórico preservado
     await rt.handle(botId, cb(`p:${planId}`) as any);
-    expect(lastText()).toContain("VIP Trans");
+    expect(lastText()).toContain("VIP Trans Brasil"); // nome que o cliente vê
     const order = (await db.select().from(s.orders))[0]!;
     await rt.handle(botId, cb(`bump:y:${order.id}`) as any);
     const o2 = (await db.select().from(s.orders).where(eq(s.orders.id, order.id)))[0]!;

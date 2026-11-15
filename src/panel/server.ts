@@ -417,6 +417,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     return rows.map((c) => ({
       id: c.id,
       title: c.title,
+      displayName: c.displayName,
       type: c.type,
       telegramChatId: c.telegramChatId,
       inviteLink: c.inviteLink,
@@ -465,7 +466,9 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
 
   app.put<{ Params: { id: string } }>("/api/channels/:id", async (req) => {
     const ch = await ownChannel(req, req.params.id);
-    const p = z.object({ extraPriceCents: cents.nullable().optional(), managerBotId: z.string().uuid().optional(), active: z.boolean().optional() }).parse(req.body);
+    const p = z
+      .object({ extraPriceCents: cents.nullable().optional(), managerBotId: z.string().uuid().optional(), active: z.boolean().optional(), displayName: z.string().trim().max(80).nullable().optional() })
+      .parse(req.body);
     if (p.managerBotId && p.managerBotId !== ch.managerBotId) {
       const bot = await ownBot(req, p.managerBotId);
       const rights = await checkRights(tgApi(bot), ch.telegramChatId, bot.telegramBotId, ch.type === "channel").catch(() => ({ ok: false, missing: ["ser administrador do canal"] }));
@@ -476,7 +479,11 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     }
     const [row] = await db
       .update(s.channels)
-      .set({ ...(p.extraPriceCents !== undefined ? { extraPriceCents: p.extraPriceCents } : {}), ...(p.active !== undefined ? { active: p.active } : {}) })
+      .set({
+        ...(p.extraPriceCents !== undefined ? { extraPriceCents: p.extraPriceCents } : {}),
+        ...(p.active !== undefined ? { active: p.active } : {}),
+        ...(p.displayName !== undefined ? { displayName: p.displayName || null } : {}),
+      })
       .where(eq(s.channels.id, ch.id))
       .returning();
     return row;

@@ -164,6 +164,8 @@ export const channels = pgTable(
     accountId: accountId(),
     telegramChatId: tgId("telegram_chat_id").notNull(),
     title: text("title").notNull(),
+    /** Nome que o cliente vê nas mensagens do bot (o título no Telegram pode ser discreto). */
+    displayName: text("display_name"),
     type: text("type", { enum: ["channel", "supergroup", "group"] }).notNull(),
     /** Bot que cria o link, aprova as entradas e remove quem venceu. */
     managerBotId: uuid("manager_bot_id").references((): any => bots.id, { onDelete: "set null" }),

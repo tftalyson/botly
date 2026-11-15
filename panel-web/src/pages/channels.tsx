@@ -43,15 +43,29 @@ export function ChannelsPage() {
 function ChannelRow({ c, bots, reload }: { c: Channel; bots: BotListItem[]; reload: () => void }) {
   const { busy, run } = useAction();
   const [price, setPrice] = useState<number | null>(c.extraPriceCents);
+  const [dname, setDname] = useState(c.displayName ?? "");
   return (
     <div className="list-item" style={{ alignItems: "flex-start" }}>
       <div className="avatar">{c.title.slice(0, 1).toUpperCase()}</div>
       <div className="grow stack" style={{ gap: 10 }}>
         <div className="row">
-          <span className="title">{c.title}</span>
+          <span className="title">{c.displayName || c.title}</span>
+          {c.displayName && <span className="small muted">no Telegram: {c.title}</span>}
           {!c.active ? <span className="chip">Desativado</span> : c.rightsOk ? <span className="chip ok">Pronto</span> : <span className="chip bad">Falta permissão</span>}
           <span className="small muted">{c.subscribers} assinantes ativos</span>
         </div>
+        <label className="field">
+          Nome que o cliente vê
+          <small>Aparece nas mensagens do bot (planos, Pix, lembretes, botão de entrar). O nome no Telegram pode continuar discreto. Vazio = usa “{c.title}”.</small>
+          <div className="row" style={{ flexWrap: "nowrap" }}>
+            <input type="text" value={dname} maxLength={80} placeholder={c.title} onChange={(e) => setDname(e.target.value)} />
+            {dname !== (c.displayName ?? "") && (
+              <button className="btn small primary" disabled={busy} onClick={() => run(() => put(`/api/channels/${c.id}`, { displayName: dname || null }).then(reload), "Nome salvo")}>
+                Salvar
+              </button>
+            )}
+          </div>
+        </label>
         <div className="small muted">
           {c.sellingBots.length ? `Vendido por ${c.sellingBots.map((u) => "@" + u).join(", ")}` : "Nenhum bot vende este canal como principal"}
         </div>

@@ -1,5 +1,6 @@
 // Avisos depois do pagamento: cliente recebe os botões de entrada;
 // o canal de avisos da conta recebe a venda.
+import { chName } from "../domain/channel-name.js";
 import { eq, inArray } from "drizzle-orm";
 import { InlineKeyboard } from "grammy";
 import * as s from "../db/schema.js";
@@ -23,8 +24,8 @@ export async function announcePaid(ctx: Ctx, rt: BotlyRuntime, r: PaidResult) {
   for (const a of accesses) {
     const ch = chans.find((x) => x.id === a.channelId);
     if (!ch) continue;
-    lines.push(`• <b>${esc(ch.title)}</b> — ${a.expiresAt ? `até ${fmtDate(a.expiresAt, tz)}` : "vitalício"}`);
-    if (ch.inviteLink) kb.url(`🔓 Entrar no ${ch.title}`, ch.inviteLink).row();
+    lines.push(`• <b>${esc(chName(ch))}</b> — ${a.expiresAt ? `até ${fmtDate(a.expiresAt, tz)}` : "vitalício"}`);
+    if (ch.inviteLink) kb.url(`🔓 Entrar no ${chName(ch)}`, ch.inviteLink).row();
   }
   try {
     const api = await rt.api(order.botId);

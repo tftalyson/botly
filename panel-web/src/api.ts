@@ -143,6 +143,7 @@ export interface BotDetail {
 export interface Channel {
   id: string;
   title: string;
+  displayName: string | null;
   type: string;
   telegramChatId: number;
   inviteLink: string | null;
