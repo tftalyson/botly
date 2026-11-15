@@ -1,0 +1,10 @@
+# Só para rodar no computador. No Easypanel use os serviços do painel
+# (Postgres e Redis PRÓPRIOS do Botly, separados da MIA).
+services:
+  db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: botly }
+    ports: ["5432:5432"]
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
