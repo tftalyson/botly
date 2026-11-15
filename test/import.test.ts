@@ -110,3 +110,25 @@ describe("importação pelo painel", () => {
     await app.close();
   });
 });
+
+describe("planilha completa do AutomatizzeBot (com Pix pendentes)", () => {
+  it("ignora Pendente e lê as colunas certas mesmo com células vazias", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("A");
+    ws.addRow(["Bot Name", "User Id", "Username", "Indicação", "ID Pagamento", "(A) Valor", "Código Assinatura", "Status Plano", "Compra", "Método de Pagamento", "Vencimento", "(B) Taxa Plataforma", "(C) Taxa Gateway", "(D) Taxa Agência", "Valor Líquido (A-B-C-D)"]);
+    ws.addRow(["TopBlacksBot", "6964391348", null, null, null, "37,00", "NPS1RR2D", "Pendente", "15/11/2026", "Pushin Pay Pix", "12/11/2036", "1,59", "0,00", "0,00", "35,41"]);
+    ws.addRow(["TopBlacksBot", "6964391348", null, null, "a33aede7", "37,00", "Z07KMUOJ", "Ativa", "15/11/2026", "Pushin Pay Pix", "12/11/2036", "1,59", "0,25", "0,00", "35,16"]);
+    ws.addRow(["TopBlacksBot", "-1", null, null, null, "7,00", "X", "Pendente", "12/07/2026", "Pushin Pay Pix", "09/07/2036", "0", "0", "0", "7"]);
+    ws.addRow(["TopBlacksBot", "5147646268", "joao", null, "b1", "16,00", "Y", "Expirada", "01/10/2026", "Pushin Pay Pix", "31/10/2026", "0", "0", "0", "16"]);
+    const { rows, columns } = await readSheet(Buffer.from(await wb.xlsx.writeBuffer()), "assinantes.xlsx");
+    expect(columns.status).toBe("Status Plano");
+    expect(columns.amount).toBe("(A) Valor");
+    const a = analyze(rows, now);
+    expect(a.unpaid).toBe(2);
+    expect(a.invalid.length).toBe(0);
+    expect(a.customers.length).toBe(2);
+    expect(a.customers.find((c) => c.telegramId === 6964391348)!.purchases).toBe(1);
+    expect(a.active).toBe(1);
+    expect(a.customers.find((c) => c.telegramId === 5147646268)!.username).toBe("joao");
+  });
+});

@@ -20,6 +20,8 @@ export interface RawRow {
   boughtAt: Date | null;
   expiresAt: Date | null;
   paymentId: string | null;
+  /** Situação da compra na planilha (Ativa, Expirada, Pendente...). */
+  status: string | null;
 }
 
 export interface ParsedRow extends RawRow {
@@ -27,14 +29,19 @@ export interface ParsedRow extends RawRow {
   username: string | null;
 }
 
-type Col = "user" | "amount" | "bought" | "expires" | "payment";
+type Col = "user" | "amount" | "bought" | "expires" | "payment" | "status";
 const HEADERS: Record<Col, RegExp> = {
   user: /user|usu[aá]rio|telegram|cliente|id\b/i,
   amount: /valor|pre[cç]o|amount|total/i,
   bought: /compra|criad|data\b|in[ií]cio|pago em|pagamento em/i,
   expires: /venc|expira|validade|t[eé]rmino|fim/i,
   payment: /pagamento|payment|transa/i,
+  status: /status|situa/i,
 };
+
+/** Situações que querem dizer "não pago": a linha é ignorada. */
+export const UNPAID = /pendente|aguardando|cancelad|recusad|estornad|reembols|expired_pix|pending|canceled|refunded|failed/i;
+const STATUS_WORDS = /\b(ativa|ativo|expirada|expirado|pendente|cancelad[ao]|aprovad[ao]|pago|recusad[ao]|estornad[ao]|active|expired|pending|paid|canceled)\b/i;
 
 const asText = (v: unknown): string => {
   if (v == null) return "";
@@ -122,6 +129,7 @@ export async function readSheet(file: Buffer, fileName: string, tz = DEFAULT_TZ)
     cells.forEach((c, i) => {
       // "ID Pagamento" é pagamento, não usuário; "Vencimento" antes de "compra".
       if (HEADERS.expires.test(c)) found.expires ??= i;
+      else if (HEADERS.status.test(c)) found.status ??= i;
       else if (/pagamento|payment|transa/i.test(c) && /id/i.test(c)) found.payment ??= i;
       else if (HEADERS.user.test(c)) found.user ??= i;
       else if (HEADERS.amount.test(c)) found.amount ??= i;
@@ -142,21 +150,33 @@ export async function readSheet(file: Buffer, fileName: string, tz = DEFAULT_TZ)
     idx.expires = dateCols.at(-1);
     if (idx.bought === undefined && dateCols.length > 1) idx.bought = dateCols[0];
   }
+  // Coluna de situação (Ativa/Expirada/Pendente): pelo título ou pelo conteúdo.
+  if (idx.status === undefined) {
+    const sample = body.slice(0, 50);
+    const hit = header.findIndex((_, i) => sample.filter((r) => STATUS_WORDS.test(asText(r[i]))).length > sample.length / 2);
+    if (hit >= 0) idx.status = hit;
+  }
   if (idx.user === undefined || idx.user < 0) throw new Error("Não achei a coluna com o ID do Telegram dos clientes.");
   if (idx.expires === undefined) throw new Error("Não achei a coluna de vencimento.");
 
   const columns: Partial<Record<Col, string>> = {};
   (Object.keys(idx) as Col[]).forEach((k) => idx[k] !== undefined && (columns[k] = header[idx[k]!] || `coluna ${idx[k]! + 1}`));
+  // Coluna própria de @usuário (planilha completa do AutomatizzeBot), quando existe e não é a do ID.
+  const unameIdx = header.findIndex((h, i) => i !== idx.user && /^(user ?name|usu[aá]rio)$/i.test(h.trim()));
   const rows: ParsedRow[] = body.map((r, i) => {
     const userCell = asText(r[idx.user!]);
+    const parsed = parseUser(userCell);
+    const uname = unameIdx >= 0 ? asText(r[unameIdx]).replace(/^@/, "") : "";
     return {
       line: headerIdx + i + 2,
       userCell,
-      ...parseUser(userCell),
+      ...parsed,
+      username: parsed.username ?? (/^[\w.]{2,64}$/.test(uname) ? uname : null),
       amountCents: idx.amount !== undefined ? parseMoney(r[idx.amount]) : null,
       boughtAt: idx.bought !== undefined ? parseDate(r[idx.bought], tz, false) : null,
       expiresAt: parseDate(r[idx.expires!], tz),
       paymentId: idx.payment !== undefined ? asText(r[idx.payment]) || null : null,
+      status: idx.status !== undefined ? asText(r[idx.status]) || null : null,
     };
   });
   return { rows, columns };
@@ -182,6 +202,8 @@ export interface Analysis {
   columns: Partial<Record<Col, string>>;
   lines: number;
   invalid: { line: number; text: string; reason: string }[];
+  /** Linhas de Pix gerado e não pago (Pendente, Cancelada...): ignoradas. */
+  unpaid: number;
   customers: ImportCustomer[];
   active: number;
   expired: number;
@@ -198,9 +220,14 @@ export const groupKey = (amountCents: number | null, durationDays: number | null
 
 export function analyze(rows: ParsedRow[], now: Date): Analysis {
   const invalid: Analysis["invalid"] = [];
+  let unpaid = 0;
   const by = new Map<number, ImportCustomer & { lastBought: number }>();
   for (const r of rows) {
     if (!r.userCell && !r.expiresAt) continue; // linha vazia
+    if (r.status && UNPAID.test(r.status)) {
+      unpaid++;
+      continue;
+    }
     if (!r.telegramId) {
       invalid.push({ line: r.line, text: r.userCell.slice(0, 40), reason: "sem ID do Telegram" });
       continue;
@@ -240,6 +267,7 @@ export function analyze(rows: ParsedRow[], now: Date): Analysis {
     columns: {},
     lines: rows.length,
     invalid,
+    unpaid,
     customers,
     active: customers.filter((c) => c.expiresAt > now).length,
     expired: customers.filter((c) => c.expiresAt <= now).length,
@@ -324,7 +352,7 @@ export async function applyImport(
       }
     });
   }
-  const stats = { linhas: a.analysis.lines, clientes: list.length, ativos: a.analysis.active, vencidos: a.analysis.expired, ignorados: a.analysis.invalid.length, novos: created, atualizados: updated, mantidos: kept };
+  const stats = { linhas: a.analysis.lines, naoPagas: a.analysis.unpaid, clientes: list.length, ativos: a.analysis.active, vencidos: a.analysis.expired, ignorados: a.analysis.invalid.length, novos: created, atualizados: updated, mantidos: kept };
   const [imp] = await ctx.db
     .insert(s.imports)
     .values({ accountId: a.accountId, botId: a.botId, channelId: a.channelId, fileName: a.fileName, status: "done", stats, createdBy: a.userId ?? null })

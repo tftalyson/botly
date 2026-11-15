@@ -19,6 +19,7 @@ interface Preview {
   alreadyInBotly: number;
   invalid: { line: number; text: string; reason: string }[];
   invalidCount: number;
+  unpaid: number;
   groups: Group[];
   suggested: Record<string, string | null>;
   plans: { id: string; name: string; priceCents: number }[];
@@ -36,7 +37,7 @@ interface PastImport {
   channel: string | null;
 }
 
-const COL_LABEL: Record<string, string> = { user: "Cliente (ID do Telegram)", amount: "Valor", bought: "Data da compra", expires: "Vencimento", payment: "ID do pagamento" };
+const COL_LABEL: Record<string, string> = { user: "Cliente (ID do Telegram)", amount: "Valor", bought: "Data da compra", expires: "Vencimento", payment: "ID do pagamento", status: "Situação" };
 const durLabel = (d: number | null) => (d == null ? "duração desconhecida" : d >= 3650 ? "vitalício" : d === 1 ? "1 dia" : `${d} dias`);
 const fmt = (iso: string) => new Date(iso).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
 
@@ -240,6 +241,11 @@ function PreviewPanel({
         <Stat label="Já vencidos" value={prev.expired} />
         <Stat label="Linhas ignoradas" value={prev.invalidCount} />
       </div>
+      {prev.unpaid > 0 && (
+        <div className="note small">
+          <b>{prev.unpaid} linhas de Pix não pago</b> (Pendente, Cancelada) ficaram de fora: essas pessoas geraram o Pix mas não pagaram.
+        </div>
+      )}
       <p className="small muted">
         {prev.lines} linhas lidas. Quem aparece mais de uma vez (renovações) vira um cliente só, com o maior vencimento.
         {prev.alreadyInBotly ? ` ${prev.alreadyInBotly} já estão no Botly neste canal: só têm o vencimento atualizado se o da planilha for maior.` : ""}

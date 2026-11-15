@@ -798,6 +798,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
       alreadyInBotly: Number(existing),
       invalid: analysis.invalid.slice(0, 20),
       invalidCount: analysis.invalid.length,
+      unpaid: analysis.unpaid,
       groups: analysis.groups,
       suggested: suggestPlans(analysis.groups, plans),
       plans: plans.map((p) => ({ id: p.id, name: p.name, priceCents: p.priceCents })),
