@@ -3,6 +3,7 @@ import { and, eq, gt, isNotNull, lt } from "drizzle-orm";
 import * as s from "../db/schema.js";
 import type { Ctx } from "../domain/context.js";
 import { checkCharge } from "../domain/sales.js";
+import { cutExpired, planOutbox, sendDue } from "../domain/retention.js";
 import { announcePaid } from "../bot/notify.js";
 import type { BotlyRuntime } from "../bot/runtime.js";
 
@@ -45,16 +46,23 @@ export async function reconcileCharges(ctx: Ctx, rt: BotlyRuntime) {
 
 export function startTicks(ctx: Ctx, rt: BotlyRuntime) {
   let running = false;
+  let n = 0;
   const timer = setInterval(async () => {
     if (running) return;
     running = true;
-    try {
-      await reconcileCharges(ctx, rt);
-    } catch (err) {
-      ctx.log.error({ err: String(err) }, "erro nas tarefas periódicas");
-    } finally {
-      running = false;
-    }
+    n++;
+    const step = async (name: string, fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+      } catch (err) {
+        ctx.log.error({ step: name, err: String(err) }, "erro nas tarefas periódicas");
+      }
+    };
+    await step("pix", () => reconcileCharges(ctx, rt));
+    if (n % 10 === 1) await step("fila de lembretes", () => planOutbox(ctx));
+    await step("envio de lembretes", () => sendDue(ctx, rt));
+    if (n % 5 === 1) await step("corte", () => cutExpired(ctx, rt));
+    running = false;
   }, 60_000);
   return () => clearInterval(timer);
 }

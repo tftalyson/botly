@@ -61,3 +61,18 @@ export function durationLabel(unit: DurationUnit, value: number): string {
   if (unit === "month") return value === 1 ? "1 mês" : `${value} meses`;
   return value === 1 ? "1 ano" : `${value} anos`;
 }
+
+/** Instante UTC de um dia/hora no fuso (ex.: 22/11 às 10:00 em São Paulo). */
+export function atLocal(year: number, month: number, day: number, hhmm: string, tz = DEFAULT_TZ): Date {
+  const [h, m] = hhmm.split(":").map(Number) as [number, number];
+  const guess = Date.UTC(year, month - 1, day, h || 0, m || 0);
+  const z = zoned(new Date(guess), tz);
+  const asIfUtc = Date.UTC(z.year, z.month - 1, z.day, z.hour, z.minute);
+  return new Date(guess - (asIfUtc - guess));
+}
+
+/** Soma dias a uma data de calendário (ano, mês, dia) sem depender de fuso. */
+export function addDays(y: number, m: number, d: number, n: number) {
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate() };
+}

@@ -365,6 +365,54 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     await pay(c, L, order.id, { avoidGatewayId: last?.gatewayId });
   });
 
+  // ───────────── Renovação pelos botões do lembrete ─────────────
+
+  /** Pedido de renovação do mesmo plano (opcionalmente com canal extra ou desconto). */
+  async function renewFromAccess(c: Context, accessId: string, opts: { withExtra?: boolean; discountPct?: number; source?: string } = {}) {
+    const L = await load();
+    const { customer } = await who(c, L);
+    const a = (await ctx.db.select().from(s.accesses).where(and(eq(s.accesses.id, accessId), eq(s.accesses.customerId, customer.id))))[0];
+    const plan = a?.planId ? (await ctx.db.select().from(s.plans).where(and(eq(s.plans.id, a.planId), eq(s.plans.active, true))))[0] : undefined;
+    if (!a || !plan) {
+      // Plano não existe mais: mostra os planos atuais.
+      await plansScreen(c);
+      return;
+    }
+    const items: OrderItem[] = [
+      { type: "plan", refId: plan.id, name: plan.name, channelIds: [a.channelId], durationUnit: plan.durationUnit, durationValue: plan.durationValue, priceCents: plan.priceCents },
+    ];
+    const ren = L.bot.upsell.renewal;
+    if (opts.withExtra && ren?.enabled && ren.extraChannelId && !(await activeAccess(ctx, customer.id, ren.extraChannelId))) {
+      const ch = (await ctx.db.select().from(s.channels).where(and(eq(s.channels.id, ren.extraChannelId), eq(s.channels.active, true))))[0];
+      const price = L.bot.upsell.orderBump?.priceOverrides?.[ren.extraChannelId] ?? ch?.extraPriceCents;
+      if (ch && price) items.push({ type: "extra", refId: ch.id, name: ch.title, channelIds: [ch.id], durationUnit: plan.durationUnit, durationValue: plan.durationValue, priceCents: price });
+    }
+    const subtotal = items.reduce((x, i) => x + i.priceCents, 0);
+    const discountCents = opts.discountPct ? Math.round((plan.priceCents * opts.discountPct) / 100) : 0;
+    const order = await createOrder(ctx, { accountId: L.account.id, botId, customerId: customer.id, kind: "renewal", items, discountCents, source: opts.source ?? "lembrete" });
+    await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "renew_clicked", meta: { accessId, withExtra: items.length > 1, discountPct: opts.discountPct ?? 0, subtotal } });
+    await pay(c, L, order.id);
+  }
+
+  bot.callbackQuery(/^rn:(.+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    await renewFromAccess(c, c.match[1]!);
+  });
+  bot.callbackQuery(/^rnx:(.+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    await renewFromAccess(c, c.match[1]!, { withExtra: true });
+  });
+  // "Volte" com desconto: o desconto vem do modelo da mensagem enviada (não do botão).
+  bot.callbackQuery(/^wb:(.+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    const o = (await ctx.db.select().from(s.outbox).where(and(eq(s.outbox.id, c.match[1]!), eq(s.outbox.customerId, customer.id))))[0];
+    if (!o?.accessId) return plansScreen(c);
+    const t = o.templateId ? (await ctx.db.select().from(s.templates).where(eq(s.templates.id, o.templateId)))[0] : undefined;
+    await renewFromAccess(c, o.accessId, { discountPct: t?.discountPct ?? 0, source: "volte" });
+  });
+
   // ───────────── Minha assinatura ─────────────
 
   async function myPlan(c: Context) {

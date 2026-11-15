@@ -125,7 +125,7 @@ code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9em;
 /* ── Formulários ── */
 label.field { display: grid; gap: 6px; font-weight: 600; font-size: 14px; }
 label.field small { font-weight: 400; color: var(--muted); }
-input[type="text"], input[type="email"], input[type="password"], input[type="url"], input[type="number"], select, textarea {
+input[type="text"], input[type="email"], input[type="password"], input[type="url"], input[type="number"], input[type="time"], select, textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: var(--radius-s);

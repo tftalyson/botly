@@ -53,14 +53,17 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 - `src/cli/setup.ts`: configuração pelo Console do Easypanel enquanto o painel não existe (conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, listar).
 - Painel (`BOTLY_ROLE=panel`, `src/panel/server.ts` + `panel-web/`): primeiro acesso cria conta + dono (usa a conta do Console se já existir), login por cookie, Início (vendas de hoje, assinantes, passos para começar), Bots (conectar com passo a passo do BotFather; página do bot com abas Geral/Planos/Pagamento/Ofertas e prévia do chat ao vivo), Canais (bot gestor, preço como extra, conferir permissões, adicionar pelo ID), Pacotes, Formas de pagamento (chave criptografada, testar), Configurações (maioridade, canal de avisos).
 - Visual do painel: névoa fria #EEF0F6, tinta violeta #1A1633, marca #5B2EFF, verde-água #0E9F86 só para dinheiro; títulos Bricolage Grotesque, texto Figtree. Elemento marcante = prévia do chat na página do bot.
-- Testes: `test/flow.test.ts` (Telegram e PushinPay simulados, fluxo inteiro) e `test/panel.test.ts` (API do painel).
+- Retenção (`src/domain/retention.ts`): modelos padrão D-3, D-1, D0 (lembrete) e D+1, D+7 15% (volte); `planOutbox` monta a fila dos próximos 8 dias (chave única acesso+modelo+vencimento) a cada 10 min; `sendDue` manda a cada minuto pelo bot da última compra (pula quem renovou, horário passado há +12 h, quem bloqueou o bot); botões rn:/rnx:/p: (renovar, renovar + extra, plano longo) e wb: (volte com o desconto do modelo); `cutExpired` a cada 5 min: vencido além da tolerância vira expired; com `settings.autoRemove` remove do canal (padrão: simulação). Painel: páginas Retenção (Hoje/Amanhã/7 dias, esperado, renovaram, lista de quem sairia + chave do corte) e Lembretes (horário, tolerância, textos, dias, desconto, mídia); aba Ofertas do bot com “Na renovação”.
+- Testes: `test/flow.test.ts` (Telegram e PushinPay simulados, fluxo inteiro), `test/panel.test.ts` (API do painel) e `test/retention.test.ts` (fila, envio, renovação pelo botão, corte simulado/real, volte com desconto).
 
 ## Ainda falta (próximas etapas)
-- Painel: Clientes, Retenção, Lembretes, Dashboard completo (gráficos, ranking), upload de mídia, super admin.
-- Lembretes de vencimento, corte (simulação primeiro), recuperação de Pix, oferta pós-venda, importação.
+Ordem combinada: 1) ✅ lembretes + corte (simulação) + página Retenção; 2) importação do AutomatizzeBot; 3) Clientes + Dashboard; 4) recuperação de Pix + oferta pós-venda.
+- Painel: Clientes, Dashboard completo (gráficos, ranking), upload de mídia, super admin.
+- Recuperação de Pix, oferta pós-venda, importação.
 
 ## Confirmado em produção
 - 15/11: compra real com PushinPay (R$ 1,00, bot de teste @cervoadmbot, canal privado "Cervo – Atualizações"): Pix gerado e pagamento reconhecido NA HORA pelo aviso da PushinPay (token no caminho do endereço).
+- Pedido de entrada aprovado sozinho para quem pagou; remoção (ban + unban) funciona em canal só com "Adicionar inscritos".
 - Em canal o app não mostra "banir usuários": só "Adicionar inscritos" é exigido.
 
 ## A validar

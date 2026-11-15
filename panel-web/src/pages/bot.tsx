@@ -54,7 +54,7 @@ export function BotPage() {
           {tab === "geral" && <GeneralTab draft={draft} setDraft={setDraft} channels={chans.data} saved={bot.data.bot} reload={bot.reload} />}
           {tab === "planos" && <PlansTab botId={draft.id} plans={plans} reload={bot.reload} />}
           {tab === "pagamento" && <PaymentTab draft={draft} setDraft={setDraft} gateways={gws.data} reload={bot.reload} />}
-          {tab === "ofertas" && <OffersTab draft={draft} setDraft={setDraft} channels={chans.data} reload={bot.reload} />}
+          {tab === "ofertas" && <OffersTab draft={draft} setDraft={setDraft} channels={chans.data} plans={plans} reload={bot.reload} />}
         </div>
         <ChatPreview bot={draft} plans={plans.filter((p) => p.active)} channelTitle={main?.title} />
       </div>
@@ -417,7 +417,9 @@ function PaymentTab({ draft, setDraft, gateways, reload }: TabProps & { gateways
   );
 }
 
-function OffersTab({ draft, setDraft, channels, reload }: TabProps & { channels: Channel[] }) {
+function OffersTab({ draft, setDraft, channels, plans, reload }: TabProps & { channels: Channel[]; plans: Plan[] }) {
+  const rn = draft.upsell.renewal ?? { enabled: false, extraChannelId: null, longPlanId: null };
+  const setRn = (v: typeof rn) => setDraft({ ...draft, upsell: { ...draft.upsell, renewal: v } });
   const { busy, run } = useAction();
   const ob = draft.upsell.orderBump ?? { enabled: false, channelIds: [] };
   const extras = channels.filter((c) => c.active && c.id !== draft.mainChannelId);
@@ -469,6 +471,46 @@ function OffersTab({ draft, setDraft, channels, reload }: TabProps & { channels:
         ) : (
           <div className="note warn small">Cadastre outros canais para oferecer como extra.</div>
         ))}
+      <hr style={{ border: 0, borderTop: "1px solid var(--line-2)", width: "100%" }} />
+      <div>
+        <h2>Na renovação</h2>
+        <p className="muted small">
+          Os lembretes de vencimento já trazem o botão “Renovar”. Aqui você pode juntar mais dois botões na mesma mensagem, sem mandar nada a mais: renovar com um canal extra e um plano mais longo.
+        </p>
+      </div>
+      <Toggle checked={rn.enabled} onChange={(v) => setRn({ ...rn, enabled: v })}>
+        Oferecer opções na renovação
+      </Toggle>
+      {rn.enabled && (
+        <div className="grid-2">
+          <label className="field">
+            Botão “Renovar + canal extra”
+            <select value={rn.extraChannelId ?? ""} onChange={(e) => setRn({ ...rn, extraChannelId: e.target.value || null })}>
+              <option value="">Não mostrar</option>
+              {extras.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.title}
+                </option>
+              ))}
+            </select>
+            <small>Só aparece para quem ainda não tem o canal.</small>
+          </label>
+          <label className="field">
+            Botão do plano mais longo
+            <select value={rn.longPlanId ?? ""} onChange={(e) => setRn({ ...rn, longPlanId: e.target.value || null })}>
+              <option value="">Não mostrar</option>
+              {plans
+                .filter((p) => p.active)
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} — {brl(p.priceCents)}
+                  </option>
+                ))}
+            </select>
+            <small>Ex.: semestral, para quem renova todo mês.</small>
+          </label>
+        </div>
+      )}
       <hr style={{ border: 0, borderTop: "1px solid var(--line-2)", width: "100%" }} />
       <Toggle checked={draft.showBundles} onChange={(v) => setDraft({ ...draft, showBundles: v })}>
         Mostrar o botão “Pacotes promocionais” na lista de planos

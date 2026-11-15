@@ -14,6 +14,7 @@ import { apiForToken } from "../bot/api.js";
 import { botToken } from "../bot/runtime.js";
 import type { Transformer } from "grammy";
 import { gatewayClient } from "../payments/gateway.js";
+import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { hashPassword, LoginLimiter, newToken, passwordProblem, tokenHash, verifyPassword } from "./auth.js";
 
 const COOKIE = "botly_sess";
@@ -550,6 +551,135 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     for (const b of bots)
       if (b.routing.gatewayIds.includes(id)) await db.update(s.bots).set({ routing: { ...b.routing, gatewayIds: b.routing.gatewayIds.filter((x) => x !== id) } }).where(eq(s.bots.id, b.id));
     await db.delete(s.gateways).where(and(eq(s.gateways.id, id), eq(s.gateways.accountId, acc(req))));
+    return { ok: true };
+  });
+
+  // ─── Retenção e lembretes ───
+
+  app.get<{ Querystring: { range?: string } }>("/api/retention", async (req) => {
+    const id = acc(req);
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, id)))[0]!;
+    const tz = a.settings.timezone ?? DEFAULT_TZ;
+    const today = startOfDay(ctx.now(), tz);
+    const day = 86_400_000;
+    const range = req.query.range === "tomorrow" ? [1, 2] : req.query.range === "week" ? [0, 8] : [0, 1];
+    // Começo/fim de dia somando 26 h e recortando no dia certo (horário de verão não quebra).
+    const from = range[0] ? startOfDay(new Date(today.getTime() + range[0] * day + 2 * 3600_000), tz) : today;
+    const to = startOfDay(new Date(today.getTime() + range[1]! * day + 2 * 3600_000), tz);
+    const rows = await retentionWindow(ctx, id, from, to);
+    const items = rows.map((r) => ({
+      id: r.o.id,
+      when: r.o.scheduledFor,
+      kind: r.kind,
+      days: r.offset != null ? Math.round(r.offset / 1440) : null,
+      discountPct: r.discountPct ?? 0,
+      status: r.o.status,
+      outcome: r.o.outcome,
+      error: r.o.error,
+      expectedCents: r.o.expectedCents,
+      customer: { tg: r.customer.tg, name: r.customer.username ? "@" + r.customer.username : (r.customer.firstName ?? String(r.customer.tg)) },
+      channel: r.channel,
+      expiresAt: r.expiresAt,
+      bot: r.bot,
+    }));
+    const rem = items.filter((i) => i.kind === "reminder");
+    const renewed = items.filter((i) => i.outcome === "renewed" || i.outcome === "renewed_upsell");
+    const removals = await pendingRemovals(ctx, id);
+    return {
+      items,
+      totals: {
+        expectedCents: rem.filter((i) => i.status !== "skipped" || i.outcome).reduce((x, i) => x + i.expectedCents, 0),
+        customers: new Set(rem.map((i) => i.customer.tg)).size,
+        sent: items.filter((i) => i.status === "sent").length,
+        scheduled: items.filter((i) => i.status === "scheduled").length,
+        renewed: renewed.length,
+        upsell: items.filter((i) => i.outcome === "renewed_upsell").length,
+      },
+      autoRemove: !!a.settings.autoRemove,
+      removals: removals.map((r) => ({ id: r.id, expiresAt: r.expiresAt, channel: r.channel, name: r.username ? "@" + r.username : (r.firstName ?? String(r.tg)) })),
+    };
+  });
+
+  app.post("/api/retention/refresh", async (req) => {
+    await planOutbox(ctx, acc(req));
+    return { ok: true };
+  });
+
+  app.get("/api/templates", async (req) => {
+    const rows = await ensureTemplates(ctx, acc(req));
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
+    return {
+      reminderTime: a.settings.reminderTime ?? "10:00",
+      removeGraceHours: a.settings.removeGraceHours ?? 0,
+      autoRemove: !!a.settings.autoRemove,
+      templates: rows
+        .filter((r) => !r.botId)
+        .map((r) => ({ id: r.id, kind: r.kind, days: Math.round(r.offsetMinutes / 1440), text: r.text, discountPct: r.discountPct, enabled: r.enabled, mediaUrl: r.media?.url ?? null }))
+        .sort((x, y) => x.days - y.days),
+    };
+  });
+
+  const tplBody = z.object({
+    kind: z.enum(["reminder", "winback"]),
+    days: z.number().int().min(-30).max(60),
+    text: z.string().trim().min(1).max(1024),
+    discountPct: z.number().int().min(0).max(90).optional(),
+    enabled: z.boolean().optional(),
+    mediaUrl: z.string().url().nullable().or(z.literal("")).optional(),
+  });
+  function tplValues(p: Partial<z.infer<typeof tplBody>>) {
+    if (p.kind === "reminder" && p.days !== undefined && p.days > 0) throw new HttpError(400, "Lembrete é antes ou no dia do vencimento (0 ou menos).");
+    if (p.kind === "winback" && p.days !== undefined && p.days < 1) throw new HttpError(400, "A mensagem de “volte” sai pelo menos 1 dia depois do vencimento.");
+    return {
+      ...(p.kind ? { kind: p.kind } : {}),
+      ...(p.days !== undefined ? { offsetMinutes: p.days * 1440 } : {}),
+      ...(p.text ? { text: p.text } : {}),
+      ...(p.discountPct !== undefined ? { discountPct: p.discountPct } : {}),
+      ...(p.enabled !== undefined ? { enabled: p.enabled } : {}),
+      ...(p.mediaUrl !== undefined ? { media: p.mediaUrl ? { type: /\.(mp4|mov|webm)(\?|$)/i.test(p.mediaUrl) ? ("video" as const) : ("photo" as const), url: p.mediaUrl } : null } : {}),
+    };
+  }
+  /** Mudou o modelo: refaz a fila ainda não enviada dele. */
+  async function replan(templateId: string, accountId: string) {
+    await db.delete(s.outbox).where(and(eq(s.outbox.templateId, templateId), eq(s.outbox.status, "scheduled")));
+    await planOutbox(ctx, accountId);
+  }
+
+  app.post("/api/templates", async (req) => {
+    const p = tplBody.parse(req.body);
+    const [row] = await db.insert(s.templates).values({ accountId: acc(req), offsetMinutes: 0, text: p.text, kind: p.kind, ...tplValues(p) }).returning();
+    await planOutbox(ctx, acc(req));
+    return row;
+  });
+
+  app.put<{ Params: { id: string } }>("/api/templates/:id", async (req) => {
+    const cur = (await db.select().from(s.templates).where(and(eq(s.templates.id, req.params.id), eq(s.templates.accountId, acc(req)))))[0];
+    if (!cur) throw notFound("Mensagem");
+    const p = tplBody.partial().parse(req.body);
+    await db.update(s.templates).set(tplValues({ kind: cur.kind as "reminder", ...p })).where(eq(s.templates.id, cur.id));
+    await replan(cur.id, acc(req));
+    return { ok: true };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/templates/:id", async (req) => {
+    const cur = (await db.select().from(s.templates).where(and(eq(s.templates.id, req.params.id), eq(s.templates.accountId, acc(req)))))[0];
+    if (!cur) throw notFound("Mensagem");
+    await db.delete(s.outbox).where(and(eq(s.outbox.templateId, cur.id), eq(s.outbox.status, "scheduled")));
+    await db.delete(s.templates).where(eq(s.templates.id, cur.id));
+    return { ok: true };
+  });
+
+  app.put("/api/reminder-settings", async (req) => {
+    const p = z
+      .object({ reminderTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(), removeGraceHours: z.number().int().min(0).max(168).optional(), autoRemove: z.boolean().optional() })
+      .parse(req.body);
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
+    await db.update(s.accounts).set({ settings: { ...a.settings, ...p }, updatedAt: ctx.now() }).where(eq(s.accounts.id, a.id));
+    if (p.reminderTime && p.reminderTime !== a.settings.reminderTime) {
+      // Horário mudou: refaz tudo o que ainda não saiu.
+      await db.delete(s.outbox).where(and(eq(s.outbox.accountId, a.id), eq(s.outbox.status, "scheduled")));
+      await planOutbox(ctx, a.id);
+    }
     return { ok: true };
   });
 

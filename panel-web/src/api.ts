@@ -105,7 +105,10 @@ export interface BotDetail {
   previewUrl: string | null;
   previewButton: string | null;
   routing: { mode: "fixed" | "alternar" | "equilibrar" | "limite"; gatewayIds: string[]; dailyLimitCents?: Record<string, number> };
-  upsell: { orderBump?: { enabled: boolean; channelIds: string[]; priceOverrides?: Record<string, number> } };
+  upsell: {
+    orderBump?: { enabled: boolean; channelIds: string[]; priceOverrides?: Record<string, number> };
+    renewal?: { enabled: boolean; extraChannelId?: string | null; longPlanId?: string | null };
+  };
   showBundles: boolean;
 }
 export interface Channel {
