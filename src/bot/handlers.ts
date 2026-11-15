@@ -690,7 +690,8 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       await c.approveChatJoinRequest(req.from.id);
       await ctx.db.update(s.accesses).set({ joinedAt: ctx.now() }).where(eq(s.accesses.id, acc.id));
       await advanceFunnel(ctx, customer!.id, "joined");
-      await logEvent(ctx, { accountId: row.accountId, botId, customerId: customer!.id, type: "joined", meta: { channelId: channel.id } });
+      // Conta para o bot que vendeu (o bot gestor só aprova).
+      await logEvent(ctx, { accountId: row.accountId, botId: acc.billingBotId ?? botId, customerId: customer!.id, type: "joined", meta: { channelId: channel.id, managerBotId: botId } });
       return;
     }
     await c.declineChatJoinRequest(req.from.id);

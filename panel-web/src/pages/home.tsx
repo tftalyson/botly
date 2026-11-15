@@ -637,10 +637,10 @@ function BotPicker({ bots, value, onChange }: { bots: BotListItem[]; value: stri
 
 // ─── Quem são as pessoas de cada etapa do funil ───
 
-const STEP_KEYS = ["started", "viewed_plans", "chose_plan", "pix_generated", "paid"] as const;
+const STEP_KEYS = ["started", "viewed_plans", "chose_plan", "pix_generated", "paid", "joined"] as const;
 type StepKey = (typeof STEP_KEYS)[number];
-const STEP_TAB: Record<StepKey, string> = { started: "Iniciaram", viewed_plans: "Viram planos", chose_plan: "Escolheram", pix_generated: "Geraram Pix", paid: "Pagaram" };
-const STEP_STOP: Record<StepKey, string> = { started: "Só deu /start", viewed_plans: "Viu os planos", chose_plan: "Escolheu, não gerou Pix", pix_generated: "Gerou Pix, não pagou", paid: "Pagou" };
+const STEP_TAB: Record<StepKey, string> = { started: "Iniciaram", viewed_plans: "Viram planos", chose_plan: "Escolheram", pix_generated: "Geraram Pix", paid: "Pagaram", joined: "Entraram" };
+const STEP_STOP: Record<StepKey, string> = { started: "Só deu /start", viewed_plans: "Viu os planos", chose_plan: "Escolheu, não gerou Pix", pix_generated: "Gerou Pix, não pagou", paid: "Pagou, não entrou", joined: "Entrou no canal" };
 interface Person {
   customerId: string;
   name: string | null;
@@ -653,6 +653,7 @@ interface Person {
   chosen: { name: string; cents: number } | null;
   pix: { items: string[]; cents: number; status: string; at: string; count: number } | null;
   paid: { items: string[]; cents: number; at: string } | null;
+  joinedAt: string | null;
 }
 const at = (iso: string) => new Date(iso).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
@@ -674,7 +675,7 @@ function FunnelPeople({ q, initial, counts, onClose }: { q: string; initial: num
           </button>
         ))}
       </div>
-      {step !== "paid" && (
+      {step !== "joined" && (
         <label className="check-line">
           <input type="checkbox" checked={onlyStopped} onChange={(e) => setOnlyStopped(e.target.checked)} /> Só quem parou nesta etapa
         </label>
@@ -724,7 +725,10 @@ function FunnelPeople({ q, initial, counts, onClose }: { q: string; initial: num
                     )}
                   </td>
                   <td data-label="Chegou até">
-                    <span className={`chip ${p.reached === "paid" ? "ok" : p.reached === "pix_generated" ? "warn" : "plain"}`}>{STEP_STOP[p.reached]}</span>
+                    <span>
+                    <span className={`chip ${p.reached === "joined" ? "ok" : p.reached === "paid" || p.reached === "pix_generated" ? "warn" : "plain"}`}>{STEP_STOP[p.reached]}</span>
+                    {p.joinedAt && <small className="muted">entrou {at(p.joinedAt)}</small>}
+                    </span>
                   </td>
                   <td data-label="Última ação" className="muted nowrap">{at(p.last)}</td>
                 </tr>

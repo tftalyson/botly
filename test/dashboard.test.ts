@@ -114,5 +114,18 @@ describe("dashboard", () => {
     expect(paid.people.every((p) => p.reached === "paid" && p.paid)).toBe(true);
     const stopped = started.people.filter((p) => p.reached === "started");
     expect(stopped.length).toBe(2);
+    // Ninguém entrou ainda: todos os pagantes ficam em "Pagou, não entrou".
+    expect(paid.people.every((p) => p.reached === "paid")).toBe(true);
+    const d = await dashboard(db, accountId, now, TZ, "today");
+    expect(d.funnel.at(-1)).toEqual({ step: "Entraram no canal", n: 0 });
+    // Entrou no canal depois de pagar.
+    const buyer = paid.people[0]!;
+    const [ch] = await db.select().from(s.channels);
+    await db.insert(s.accesses).values({ accountId, customerId: buyer.customerId, channelId: ch!.id, status: "active", expiresAt: new Date("2026-12-15T00:00:00Z"), joinedAt: new Date("2026-11-15T17:00:00Z") });
+    const d2 = await dashboard(db, accountId, now, TZ, "today");
+    expect(d2.funnel.at(-1)!.n).toBe(1);
+    const joined = await funnelPeople(db, accountId, now, TZ, "today", undefined, null, "joined");
+    expect(joined.people.map((p) => p.customerId)).toEqual([buyer.customerId]);
+    expect(joined.people[0]!.reached).toBe("joined");
   });
 });

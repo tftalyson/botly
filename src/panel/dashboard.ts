@@ -52,6 +52,23 @@ const fOrders = (b: BotFilter) => (b ? inArray(s.orders.botId, b.length ? b : ["
 const fEvents = (b: BotFilter) => (b ? inArray(s.events.botId, b.length ? b : ["00000000-0000-0000-0000-000000000000"]) : undefined);
 const fAccess = (b: BotFilter) => (b ? inArray(s.accesses.billingBotId, b.length ? b : ["00000000-0000-0000-0000-000000000000"]) : undefined);
 
+/** Para cada compra nova paga: quando a pessoa entrou num canal da compra (depois de pagar). */
+async function joinsFor(db: Db, orders: { customerId: string; items: { channelIds: string[] }[]; at: Date | null }[]) {
+  const custIds = [...new Set(orders.map((o) => o.customerId))];
+  const acc = custIds.length
+    ? await db
+        .select({ customerId: s.accesses.customerId, channelId: s.accesses.channelId, joinedAt: s.accesses.joinedAt })
+        .from(s.accesses)
+        .where(and(inArray(s.accesses.customerId, custIds), isNotNull(s.accesses.joinedAt)))
+    : [];
+  return (o: (typeof orders)[number]) => {
+    const chs = new Set(o.items.flatMap((i) => i.channelIds));
+    const since = (o.at?.getTime() ?? 0) - 10 * 60_000;
+    const hits = acc.filter((a) => a.customerId === o.customerId && chs.has(a.channelId) && a.joinedAt!.getTime() >= since);
+    return hits.length ? new Date(Math.min(...hits.map((h) => h.joinedAt!.getTime()))) : null;
+  };
+}
+
 const pct = (a: number, b: number) => (b > 0 ? a / b : null);
 
 interface PeriodNumbers {
@@ -205,16 +222,20 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
     .from(s.events)
     .where(and(eq(s.events.accountId, accountId), fEvents(bf), inArray(s.events.type, [...funnelTypes]), gte(s.events.createdAt, from), lt(s.events.createdAt, to)))
     .groupBy(s.events.type);
-  const [paidPeople] = await db
-    .select({ n: sql<number>`count(distinct ${s.orders.customerId})::int` })
+  const newPaid = await db
+    .select({ customerId: s.orders.customerId, items: s.orders.items, at: s.orders.paidAt })
     .from(s.orders)
     .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), inArray(s.orders.kind, ["new", "bundle", "recovery"]), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
+  const joinedOf = await joinsFor(db, newPaid);
+  const paidPeople = { n: new Set(newPaid.map((o) => o.customerId)).size };
+  const joinedPeople = new Set(newPaid.filter((o) => joinedOf(o)).map((o) => o.customerId)).size;
   const funnel = [
     { step: "Iniciaram o bot (/start)", n: fr.find((x) => x.type === "started")?.n ?? 0 },
     { step: "Viram os planos", n: fr.find((x) => x.type === "viewed_plans")?.n ?? 0 },
     { step: "Escolheram um plano", n: fr.find((x) => x.type === "chose_plan")?.n ?? 0 },
     { step: "Geraram o Pix", n: fr.find((x) => x.type === "pix_generated")?.n ?? 0 },
-    { step: "Pagaram (compra nova)", n: paidPeople?.n ?? 0 },
+    { step: "Pagaram (compra nova)", n: paidPeople.n },
+    { step: "Entraram no canal", n: joinedPeople },
   ];
 
   // Rankings.
@@ -284,7 +305,7 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
 
 // ─── Pessoas do funil ───
 
-export const FUNNEL_STEPS = ["started", "viewed_plans", "chose_plan", "pix_generated", "paid"] as const;
+export const FUNNEL_STEPS = ["started", "viewed_plans", "chose_plan", "pix_generated", "paid", "joined"] as const;
 export type FunnelStep = (typeof FUNNEL_STEPS)[number];
 
 /** Quem passou por uma etapa do funil no período, com plano escolhido, Pix e se pagou. */
@@ -300,7 +321,7 @@ export async function funnelPeople(db: Db, accountId: string, now: Date, tz: str
     .from(s.orders)
     .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), inArray(s.orders.kind, ["new", "bundle", "recovery"]), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
 
-  type P = { customerId: string; botId: string | null; steps: Set<string>; first: Date; last: Date; planId?: string; bundleId?: string; pixOrderIds: string[]; paid?: (typeof paidOrders)[number] };
+  type P = { customerId: string; botId: string | null; steps: Set<string>; first: Date; last: Date; planId?: string; bundleId?: string; pixOrderIds: string[]; paid?: (typeof paidOrders)[number]; joinedAt?: Date | null };
   const people = new Map<string, P>();
   const get = (c: string, at: Date, botId: string | null) => {
     let p = people.get(c);
@@ -319,10 +340,17 @@ export async function funnelPeople(db: Db, accountId: string, now: Date, tz: str
     }
     if (e.type === "pix_generated" && typeof e.meta.orderId === "string") p.pixOrderIds.push(e.meta.orderId);
   }
+  const joinedOf = await joinsFor(db, paidOrders.map((o) => ({ ...o, customerId: o.customerId })));
   for (const o of paidOrders) {
     const p = get(o.customerId, o.at!, o.botId);
     p.steps.add("paid");
     p.paid = o;
+    const j = joinedOf(o);
+    if (j && (!p.joinedAt || j < p.joinedAt)) {
+      p.joinedAt = j;
+      p.steps.add("joined");
+      if (j > p.last) p.last = j;
+    }
   }
   const list = [...people.values()].filter((p) => p.steps.has(step)).sort((a, b) => b.last.getTime() - a.last.getTime());
   const total = list.length;
@@ -341,7 +369,7 @@ export async function funnelPeople(db: Db, accountId: string, now: Date, tz: str
   const orderIds = ids(shown.map((p) => p.pixOrderIds.at(-1)));
   const orders = orderIds.length ? await db.select({ id: s.orders.id, items: s.orders.items, total: s.orders.totalCents, status: s.orders.status, at: s.orders.createdAt }).from(s.orders).where(inArray(s.orders.id, orderIds)) : [];
 
-  const rank = (p: P) => (p.steps.has("paid") ? 4 : p.steps.has("pix_generated") ? 3 : p.steps.has("chose_plan") ? 2 : p.steps.has("viewed_plans") ? 1 : 0);
+  const rank = (p: P) => (p.steps.has("joined") ? 5 : p.steps.has("paid") ? 4 : p.steps.has("pix_generated") ? 3 : p.steps.has("chose_plan") ? 2 : p.steps.has("viewed_plans") ? 1 : 0);
   return {
     step,
     total,
@@ -362,6 +390,7 @@ export async function funnelPeople(db: Db, accountId: string, now: Date, tz: str
         chosen: pl ? { name: pl.name, cents: pl.price } : bu ? { name: `📦 ${bu.name}`, cents: bu.price } : null,
         pix: o ? { items: o.items.map((i) => i.name), cents: o.total, status: o.status, at: o.at, count: p.pixOrderIds.length } : null,
         paid: p.paid ? { items: p.paid.items.map((i) => i.name), cents: p.paid.total, at: p.paid.at } : null,
+        joinedAt: p.joinedAt ?? null,
       };
     }),
   };
