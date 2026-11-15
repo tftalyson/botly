@@ -79,7 +79,7 @@ try {
       const token = await ask("Cole o token do bot (do @BotFather): ");
       const b = await registerBot(ctx, a.id, token);
       console.log(`✅ Bot @${b.username} cadastrado e conectado.`);
-      console.log(`   Agora adicione o @${b.username} como ADMINISTRADOR do canal VIP (com "convidar usuários" e "banir usuários").`);
+      console.log(`   Agora adicione o @${b.username} como ADMINISTRADOR do canal VIP (em canal, com "Adicionar inscritos" ligado; em grupo, com "Convidar usuários via link" e "Banir usuários").`);
       break;
     }
     case "canal": {

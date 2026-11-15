@@ -19,7 +19,7 @@ export function ChannelsPage() {
         </button>
       </div>
       <div className="note" style={{ marginBottom: 16 }}>
-        Para cadastrar um canal, adicione um dos seus bots como <b>administrador</b> dele no Telegram, com “Convidar usuários via link” e “Banir usuários”. Ele aparece aqui sozinho.
+        Para cadastrar um canal, adicione um dos seus bots como <b>administrador</b> dele no Telegram, com a permissão “Adicionar inscritos” (em grupo: “Convidar usuários via link” e “Banir usuários”). Ele aparece aqui sozinho.
       </div>
       {chans.data.length === 0 ? (
         <div className="panel empty">
@@ -57,7 +57,7 @@ function ChannelRow({ c, bots, reload }: { c: Channel; bots: BotListItem[]; relo
         </div>
         {!c.rightsOk && c.active && (
           <div className="note bad small">
-            O bot gestor precisa ser administrador com “Convidar usuários via link” e “Banir usuários”. Ajuste no Telegram e clique em Conferir.
+            O bot gestor precisa ser administrador com “Adicionar inscritos” ligado (em grupo: “Convidar usuários via link” e “Banir usuários”). Ajuste no Telegram e clique em Conferir.
           </div>
         )}
         <div className="grid-2">

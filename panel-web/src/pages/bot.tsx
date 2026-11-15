@@ -65,7 +65,7 @@ export function BotPage() {
 function NewBotNote({ username }: { username: string }) {
   return (
     <div className="note" style={{ marginBottom: 16 }}>
-      <b>Bot conectado.</b> Agora, no Telegram, adicione o <b>@{username}</b> como <b>administrador</b> do canal VIP com as permissões “Convidar usuários via link” e “Banir usuários”. O canal
+      <b>Bot conectado.</b> Agora, no Telegram, adicione o <b>@{username}</b> como <b>administrador</b> do canal VIP com a permissão “Adicionar inscritos” ligada. O canal
       aparece sozinho na lista abaixo e na página <Link to="/canais">Canais</Link>.
     </div>
   );

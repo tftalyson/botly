@@ -410,7 +410,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     const p = z.object({ extraPriceCents: cents.nullable().optional(), managerBotId: z.string().uuid().optional(), active: z.boolean().optional() }).parse(req.body);
     if (p.managerBotId && p.managerBotId !== ch.managerBotId) {
       const bot = await ownBot(req, p.managerBotId);
-      const rights = await checkRights(tgApi(bot), ch.telegramChatId, bot.telegramBotId).catch(() => ({ ok: false, missing: ["ser administrador do canal"] }));
+      const rights = await checkRights(tgApi(bot), ch.telegramChatId, bot.telegramBotId, ch.type === "channel").catch(() => ({ ok: false, missing: ["ser administrador do canal"] }));
       if (!rights.ok) throw new HttpError(400, `O @${bot.username} precisa ${rights.missing.join(" e ")} antes de virar gestor.`);
       // O novo gestor cria o próprio link com aprovação.
       await db.update(s.channels).set({ managerBotId: bot.id }).where(eq(s.channels.id, ch.id));

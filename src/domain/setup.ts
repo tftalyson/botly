@@ -58,12 +58,14 @@ export interface RightsCheck {
 }
 
 /** Confere se o bot é admin do canal com as permissões necessárias. */
-export async function checkRights(api: Api, chatId: number, botTelegramId: number): Promise<RightsCheck> {
+export async function checkRights(api: Api, chatId: number, botTelegramId: number, isChannel = false): Promise<RightsCheck> {
   const m = await api.getChatMember(chatId, botTelegramId);
   if (m.status !== "administrator") return { ok: false, missing: ["ser administrador do canal"] };
   const missing: string[] = [];
-  if (!m.can_invite_users) missing.push("convidar usuários via link");
-  if (!m.can_restrict_members) missing.push("banir usuários");
+  // No app, em canal o nome costuma ser "Adicionar inscritos"; em grupo, "Convidar usuários via link".
+  if (!m.can_invite_users) missing.push(isChannel ? "adicionar inscritos (convidar via link)" : "convidar usuários via link");
+  // Em canal o app não mostra a opção de banir: não dá para exigir. Em grupo é necessária.
+  if (!isChannel && !m.can_restrict_members) missing.push("banir usuários");
   return { ok: missing.length === 0, missing };
 }
 
@@ -76,7 +78,7 @@ export async function registerChannel(ctx: Ctx, bot: typeof s.bots.$inferSelect,
   if (chat.type === "private") throw new SetupError("Isso é uma conversa privada, não um canal.");
   const type = chat.type === "channel" ? "channel" : chat.type === "supergroup" ? "supergroup" : "group";
   const title = "title" in chat && chat.title ? chat.title : String(chat.id);
-  const rights = await checkRights(api, chat.id, bot.telegramBotId);
+  const rights = await checkRights(api, chat.id, bot.telegramBotId, chat.type === "channel");
   const existing = (await ctx.db.select().from(s.channels).where(and(eq(s.channels.accountId, bot.accountId), eq(s.channels.telegramChatId, chat.id))))[0];
   // Só o bot gestor cria o link (os outros bots apenas vendem o canal).
   const isManager = !existing?.managerBotId || existing.managerBotId === bot.id;
