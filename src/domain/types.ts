@@ -24,6 +24,8 @@ export interface TemplateMedia {
   /** file_id do Telegram (depois do 1º envio) ou URL pública. */
   fileId?: string | null;
   url?: string | null;
+  /** Arquivo enviado pelo painel (tabela media). */
+  mediaId?: string | null;
 }
 
 export interface BotWelcome {

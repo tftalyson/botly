@@ -80,6 +80,18 @@ describe("painel", () => {
     const gws = (await call("GET", "/api/gateways")).body;
     expect(gws[0].bots).toEqual(["PainelBot"]);
     expect(JSON.stringify(gws)).not.toContain("token-de-teste");
+    // Upload de mídia com os limites do Telegram.
+    const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+    const up = await app.inject({ method: "POST", url: "/api/media?name=a.png&mime=image/png", payload: png, headers: { cookie, "x-botly": "1", "content-type": "application/octet-stream" } });
+    expect(up.statusCode).toBe(200);
+    const big = await app.inject({ method: "POST", url: "/api/media?name=b.jpg&mime=image/jpeg", payload: Buffer.alloc(11 * 1024 * 1024), headers: { cookie, "x-botly": "1", "content-type": "application/octet-stream" } });
+    expect(big.json().error).toContain("10 MB");
+    const bad = await app.inject({ method: "POST", url: "/api/media?name=c.exe&mime=application/x-msdownload", payload: png, headers: { cookie, "x-botly": "1", "content-type": "application/octet-stream" } });
+    expect(bad.statusCode).toBe(400);
+    const w = await call("PUT", `/api/bots/${bot.body.id}`, { welcome: { text: "Oi!", media: { type: "photo", mediaId: up.json().id } } });
+    expect(w.body.welcome.media.mediaId).toBe(up.json().id);
+    const got = await app.inject({ method: "GET", url: `/api/media/${up.json().id}`, headers: { cookie } });
+    expect(got.rawPayload.equals(png)).toBe(true);
     const ov = (await call("GET", "/api/overview")).body;
     expect(ov.checklist).toEqual({ gateway: true, bot: true, channel: true, mainChannel: true, plans: true, routing: true });
   });

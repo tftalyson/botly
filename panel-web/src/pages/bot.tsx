@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { brl, del, durationLabel, get, post, put, PROVIDER_NAME, type BotDetail, type Channel, type Gateway, type Plan, type Unit } from "../api";
+import { brl, del, durationLabel, get, mediaSrc, post, put, PROVIDER_NAME, uploadMedia, type BotDetail, type Channel, type Gateway, type Media, type Plan, type Unit } from "../api";
 import { Loading, MoneyField, Toggle, UNIT_OPTIONS, useAction, useLoad } from "../ui";
 
 type Tab = "geral" | "planos" | "pagamento" | "ofertas";
@@ -134,7 +134,7 @@ function GeneralTab({ draft, setDraft, channels, saved, reload }: TabProps & { c
       () =>
         put(`/api/bots/${draft.id}`, {
           mainChannelId: draft.mainChannelId,
-          welcome: { text: draft.welcome.text, media: media?.url ? { type: media.type, url: media.url } : null },
+          welcome: { text: draft.welcome.text, media: media?.mediaId ? { type: media.type, mediaId: media.mediaId } : media?.url ? { type: media.type, url: media.url } : null },
           previewUrl: draft.previewUrl ?? "",
           previewButton: draft.previewButton ?? null,
         }).then(reload),
@@ -167,35 +167,7 @@ function GeneralTab({ draft, setDraft, channels, saved, reload }: TabProps & { c
         <textarea value={draft.welcome.text} maxLength={1024} onChange={(e) => setDraft({ ...draft, welcome: { ...draft.welcome, text: e.target.value } })} />
       </label>
 
-      <div className="grid-2">
-        <label className="field">
-          Imagem ou vídeo de demonstração
-          <small>Link público do arquivo (.jpg, .png, .mp4). Deixe vazio para mandar só o texto.</small>
-          <input
-            type="url"
-            value={media?.url ?? ""}
-            placeholder="https://..."
-            onChange={(e) => {
-              const url = e.target.value;
-              const type = /\.(mp4|mov|webm)(\?|$)/i.test(url) ? "video" : /\.gif(\?|$)/i.test(url) ? "animation" : (media?.type ?? "photo");
-              setDraft({ ...draft, welcome: { ...draft.welcome, media: url ? { type, url } : null } });
-            }}
-          />
-        </label>
-        <label className="field">
-          Tipo
-          <small>&nbsp;</small>
-          <select
-            value={media?.type ?? "photo"}
-            disabled={!media?.url}
-            onChange={(e) => setDraft({ ...draft, welcome: { ...draft.welcome, media: media ? { ...media, type: e.target.value as "photo" } : null } })}
-          >
-            <option value="photo">Imagem</option>
-            <option value="video">Vídeo</option>
-            <option value="animation">GIF</option>
-          </select>
-        </label>
-      </div>
+      <MediaPicker value={media} onChange={(m) => setDraft({ ...draft, welcome: { ...draft.welcome, media: m } })} />
 
       <div className="grid-2">
         <label className="field">
@@ -209,7 +181,9 @@ function GeneralTab({ draft, setDraft, channels, saved, reload }: TabProps & { c
           <input type="text" value={draft.previewButton ?? ""} maxLength={40} placeholder="👀 Ver prévias grátis" onChange={(e) => setDraft({ ...draft, previewButton: e.target.value })} />
         </label>
       </div>
-      {saved.welcome.media?.url !== media?.url && media?.url && <p className="small muted">A mídia nova é enviada para o Telegram no primeiro /start depois de salvar.</p>}
+      {(saved.welcome.media?.url ?? saved.welcome.media?.mediaId) !== (media?.url ?? media?.mediaId) && media && (
+        <p className="small muted">Clique em “Salvar alterações” para usar a mídia nova. Ela sobe para o Telegram no primeiro /start depois disso.</p>
+      )}
       <SaveBar onSave={save} busy={busy} />
     </div>
   );
@@ -543,8 +517,14 @@ function ChatPreview({ bot, plans, channelTitle }: { bot: BotDetail; plans: Plan
       <div className="chat">
         <div className="bubble me">/start</div>
         <div className="bubble">
-          {media?.url && (
-            <div className="media">{media.type === "photo" ? <img src={media.url} alt="" onError={(e) => (e.currentTarget.style.display = "none")} /> : media.type === "video" ? "▶ vídeo" : "GIF"}</div>
+          {mediaSrc(media) && (
+            <div className="media">
+              {media!.type === "video" ? (
+                <video src={mediaSrc(media)!} muted playsInline />
+              ) : (
+                <img src={mediaSrc(media)!} alt="" onError={(e) => (e.currentTarget.style.display = "none")} />
+              )}
+            </div>
           )}
           <div className="txt" dangerouslySetInnerHTML={{ __html: html }} />
         </div>
@@ -573,5 +553,69 @@ function ChatPreview({ bot, plans, channelTitle }: { bot: BotDetail; plans: Plan
       </div>
       <p className="phone-note">{channelTitle ? `Vende o canal ${channelTitle}` : "Escolha o canal na aba Geral"}</p>
     </aside>
+  );
+}
+
+/** Imagem/vídeo da boas-vindas: enviar arquivo (com os limites do Telegram) ou usar um link. */
+function MediaPicker({ value, onChange }: { value: Media | null; onChange: (m: Media | null) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [linkMode, setLinkMode] = useState(!!value?.url && !value?.mediaId);
+  const src = mediaSrc(value);
+  async function pick(f: File | undefined) {
+    if (!f) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await uploadMedia(f);
+      onChange({ type: r.kind, mediaId: r.id });
+      setLinkMode(false);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="field">
+      Imagem ou vídeo de demonstração
+      <small>Foto (JPG, PNG, WEBP) até 10 MB, ou vídeo (MP4, MOV) e GIF até 50 MB. Esses são os limites do Telegram para bots.</small>
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        {src && (
+          <div style={{ width: 120, height: 90, borderRadius: 10, overflow: "hidden", background: "var(--line-2)", flex: "none" }}>
+            {value!.type === "video" ? <video src={src} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+          </div>
+        )}
+        <div className="stack" style={{ gap: 8, flex: 1, minWidth: 200 }}>
+          <div className="row">
+            <label className="btn small" style={{ cursor: busy ? "wait" : "pointer" }}>
+              {busy ? "Enviando…" : src ? "Trocar arquivo" : "Enviar arquivo"}
+              <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime" hidden disabled={busy} onChange={(e) => pick(e.target.files?.[0])} />
+            </label>
+            <button type="button" className="btn small ghost" onClick={() => setLinkMode(!linkMode)}>
+              {linkMode ? "Esconder link" : "Usar um link"}
+            </button>
+            {src && (
+              <button type="button" className="btn small ghost danger" onClick={() => (onChange(null), setLinkMode(false))}>
+                Tirar mídia
+              </button>
+            )}
+          </div>
+          {linkMode && (
+            <input
+              type="url"
+              value={value?.url ?? ""}
+              placeholder="https://... (.jpg, .png, .mp4)"
+              onChange={(e) => {
+                const url = e.target.value;
+                const type = /\.(mp4|mov|webm)(\?|$)/i.test(url) ? "video" : /\.gif(\?|$)/i.test(url) ? "animation" : "photo";
+                onChange(url ? { type, url } : null);
+              }}
+            />
+          )}
+          {err && <p className="error-text">{err}</p>}
+        </div>
+      </div>
+    </div>
   );
 }

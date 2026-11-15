@@ -91,6 +91,8 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     return reply.code(500).send({ error: "Algo deu errado do nosso lado. Tente de novo em instantes." });
   });
 
+  app.addContentTypeParser("application/octet-stream", { parseAs: "buffer", bodyLimit: 52 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+
   app.get("/health", async () => ({ ok: true }));
 
   // ─── Sessão ───
@@ -253,7 +255,12 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
   });
 
   const botPatch = z.object({
-    welcome: z.object({ text: z.string().max(1024), media: z.object({ type: z.enum(["photo", "video", "animation"]), url: z.string().url().nullable().optional(), fileId: z.string().nullable().optional() }).nullable().optional() }).optional(),
+    welcome: z
+      .object({
+        text: z.string().max(1024),
+        media: z.object({ type: z.enum(["photo", "video", "animation"]), url: z.string().url().nullable().optional(), mediaId: z.string().uuid().nullable().optional(), fileId: z.string().nullable().optional() }).nullable().optional(),
+      })
+      .optional(),
     previewUrl: z.string().url().nullable().or(z.literal("")).optional(),
     previewButton: z.string().max(40).nullable().optional(),
     mainChannelId: z.string().uuid().nullable().optional(),
@@ -280,8 +287,27 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
       const ok = await db.select({ id: s.gateways.id }).from(s.gateways).where(and(eq(s.gateways.accountId, bot.accountId), inArray(s.gateways.id, p.routing.gatewayIds)));
       if (ok.length !== p.routing.gatewayIds.length) throw notFound("Forma de pagamento");
     }
+    if (p.welcome?.media?.mediaId) {
+      const m = (await db.select({ id: s.media.id, kind: s.media.kind }).from(s.media).where(and(eq(s.media.id, p.welcome.media.mediaId), eq(s.media.accountId, bot.accountId))))[0];
+      if (!m) throw notFound("Arquivo");
+      p.welcome.media.type = m.kind;
+    }
+    const prevMedia = bot.welcome.media;
+    const sameMedia = (x: typeof p.welcome extends undefined ? never : NonNullable<NonNullable<typeof p.welcome>["media"]>) =>
+      !!prevMedia && (x.mediaId ? x.mediaId === prevMedia.mediaId : !!x.url && x.url === prevMedia.url);
     const welcome = p.welcome
-      ? { text: p.welcome.text, media: p.welcome.media ? { type: p.welcome.media.type, url: p.welcome.media.url ?? null, fileId: p.welcome.media.url === bot.welcome.media?.url ? (bot.welcome.media?.fileId ?? null) : null } : null }
+      ? {
+          text: p.welcome.text,
+          media: p.welcome.media && (p.welcome.media.mediaId || p.welcome.media.url)
+            ? {
+                type: p.welcome.media.type,
+                url: p.welcome.media.mediaId ? null : (p.welcome.media.url ?? null),
+                mediaId: p.welcome.media.mediaId ?? null,
+                // Mesmo arquivo de antes: reaproveita o file_id do Telegram.
+                fileId: sameMedia(p.welcome.media) ? (prevMedia?.fileId ?? null) : null,
+              }
+            : null,
+        }
       : undefined;
     const [row] = await db
       .update(s.bots)
@@ -320,6 +346,36 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     await tgApi(bot).deleteWebhook().catch(() => {});
     await db.delete(s.bots).where(eq(s.bots.id, bot.id));
     return { ok: true };
+  });
+
+  // ─── Mídias (upload pelo painel) ───
+  // Limites do Telegram para bots: foto até 10 MB; vídeo e GIF até 50 MB.
+  const MEDIA_RULES: Record<string, { kind: "photo" | "video" | "animation"; max: number }> = {
+    "image/jpeg": { kind: "photo", max: 10 * 1024 * 1024 },
+    "image/png": { kind: "photo", max: 10 * 1024 * 1024 },
+    "image/webp": { kind: "photo", max: 10 * 1024 * 1024 },
+    "image/gif": { kind: "animation", max: 50 * 1024 * 1024 },
+    "video/mp4": { kind: "video", max: 50 * 1024 * 1024 },
+    "video/quicktime": { kind: "video", max: 50 * 1024 * 1024 },
+  };
+
+  app.post<{ Querystring: { name?: string; mime?: string } }>("/api/media", { bodyLimit: 52 * 1024 * 1024 }, async (req) => {
+    const data = req.body as Buffer;
+    if (!Buffer.isBuffer(data) || !data.length) throw new HttpError(400, "Arquivo vazio.");
+    const mime = String(req.query.mime ?? "").toLowerCase();
+    const rule = MEDIA_RULES[mime];
+    if (!rule) throw new HttpError(400, "Formato não aceito. Use foto (JPG, PNG, WEBP), vídeo (MP4, MOV) ou GIF.");
+    if (data.length > rule.max) throw new HttpError(400, `Arquivo grande demais: o Telegram aceita até ${rule.max / 1024 / 1024} MB para ${rule.kind === "photo" ? "fotos" : "vídeos e GIFs"}.`);
+    const name = String(req.query.name ?? "arquivo").replace(/[^\w.\- ]+/g, "_").slice(0, 80) || "arquivo";
+    const [row] = await db.insert(s.media).values({ accountId: acc(req), kind: rule.kind, mime, fileName: name, size: data.length, data }).returning({ id: s.media.id, kind: s.media.kind });
+    return { id: row!.id, kind: row!.kind, size: data.length, name };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/media/:id", async (req, reply) => {
+    const m = (await db.select().from(s.media).where(and(eq(s.media.id, req.params.id), eq(s.media.accountId, acc(req)))).catch(() => []))[0];
+    if (!m) throw notFound("Arquivo");
+    reply.header("Cache-Control", "private, max-age=86400");
+    return reply.type(m.mime).send(m.data);
   });
 
   // ─── Planos ───

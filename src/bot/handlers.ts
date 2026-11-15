@@ -120,7 +120,12 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     if (L.bot.previewUrl) kb.url(L.bot.previewButton || "👀 Ver prévias grátis", L.bot.previewUrl).row();
     const text = L.bot.welcome.text || "Bem-vindo!";
     const media = L.bot.welcome.media;
-    const src = media?.fileId || media?.url;
+    let src: string | InputFile | null | undefined = media?.fileId || media?.url;
+    // Arquivo enviado pelo painel: na 1ª vez sobe para o Telegram; depois usa o file_id.
+    if (media && !src && media.mediaId) {
+      const m = (await ctx.db.select().from(s.media).where(eq(s.media.id, media.mediaId)))[0];
+      if (m) src = new InputFile(m.data, m.fileName);
+    }
     if (media && src) {
       const opts = { caption: text, parse_mode: "HTML" as const, reply_markup: kb };
       try {

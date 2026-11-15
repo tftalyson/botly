@@ -10,6 +10,7 @@
 //   no fuso da conta (padrão America/Sao_Paulo).
 import { sql } from "drizzle-orm";
 import {
+  customType,
   bigint,
   bigserial,
   boolean,
@@ -494,4 +495,22 @@ export const auditLog = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("audit_account_time").on(t.accountId, t.createdAt)],
+);
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
+
+/** Imagens e vídeos enviados pelo painel (boas-vindas, lembretes). */
+export const media = pgTable(
+  "media",
+  {
+    id: id(),
+    accountId: accountId(),
+    kind: text("kind", { enum: ["photo", "video", "animation"] }).notNull(),
+    mime: text("mime").notNull(),
+    fileName: text("file_name").notNull(),
+    size: integer("size").notNull(),
+    data: bytea("data").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("media_account").on(t.accountId)],
 );

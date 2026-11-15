@@ -15,6 +15,13 @@
       "when": 1794752973144,
       "tag": "0001_mensagens_pix",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794756277181,
+      "tag": "0002_midias",
+      "breakpoints": true
     }
   ]
 }

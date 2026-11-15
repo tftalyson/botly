@@ -92,8 +92,37 @@ export interface Plan {
 export interface Media {
   type: "photo" | "video" | "animation";
   url?: string | null;
+  mediaId?: string | null;
   fileId?: string | null;
 }
+
+/** Limites do Telegram para bots. */
+export const MEDIA_LIMITS: Record<string, { kind: Media["type"]; maxMb: number }> = {
+  "image/jpeg": { kind: "photo", maxMb: 10 },
+  "image/png": { kind: "photo", maxMb: 10 },
+  "image/webp": { kind: "photo", maxMb: 10 },
+  "image/gif": { kind: "animation", maxMb: 50 },
+  "video/mp4": { kind: "video", maxMb: 50 },
+  "video/quicktime": { kind: "video", maxMb: 50 },
+};
+
+/** Sobe um arquivo de imagem/vídeo para o Botly. */
+export async function uploadMedia(file: File): Promise<{ id: string; kind: Media["type"] }> {
+  const rule = MEDIA_LIMITS[file.type];
+  if (!rule) throw new ApiError("Formato não aceito. Use foto (JPG, PNG, WEBP), vídeo (MP4, MOV) ou GIF.", 400);
+  if (file.size > rule.maxMb * 1024 * 1024) throw new ApiError(`Arquivo grande demais: o Telegram aceita até ${rule.maxMb} MB para ${rule.kind === "photo" ? "fotos" : "vídeos e GIFs"}.`, 400);
+  const res = await fetch(`/api/media?name=${encodeURIComponent(file.name)}&mime=${encodeURIComponent(file.type)}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "x-botly": "1", "Content-Type": "application/octet-stream" },
+    body: file,
+  }).catch(() => null);
+  if (!res) throw new ApiError("Sem conexão com o painel. Confira sua internet.", 0);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiError(data?.error ?? `Erro ${res.status}`, res.status);
+  return data;
+}
+export const mediaSrc = (m: Media | null | undefined) => (m?.mediaId ? `/api/media/${m.mediaId}` : (m?.url ?? null));
 export interface BotDetail {
   id: string;
   username: string;
