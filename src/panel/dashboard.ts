@@ -46,6 +46,12 @@ export function rangeBounds(key: RangeKey, now: Date, tz = DEFAULT_TZ, custom?: 
   }
 }
 
+/** Bots escolhidos no filtro (null = todos). */
+export type BotFilter = string[] | null;
+const fOrders = (b: BotFilter) => (b ? inArray(s.orders.botId, b.length ? b : ["00000000-0000-0000-0000-000000000000"]) : undefined);
+const fEvents = (b: BotFilter) => (b ? inArray(s.events.botId, b.length ? b : ["00000000-0000-0000-0000-000000000000"]) : undefined);
+const fAccess = (b: BotFilter) => (b ? inArray(s.accesses.billingBotId, b.length ? b : ["00000000-0000-0000-0000-000000000000"]) : undefined);
+
 const pct = (a: number, b: number) => (b > 0 ? a / b : null);
 
 interface PeriodNumbers {
@@ -66,11 +72,11 @@ interface PeriodNumbers {
   lost: number;
 }
 
-async function periodNumbers(db: Db, accountId: string, from: Date, to: Date): Promise<PeriodNumbers> {
+async function periodNumbers(db: Db, accountId: string, from: Date, to: Date, bf: BotFilter = null): Promise<PeriodNumbers> {
   const paid = await db
     .select({ kind: s.orders.kind, total: s.orders.totalCents, items: s.orders.items })
     .from(s.orders)
-    .where(and(eq(s.orders.accountId, accountId), eq(s.orders.status, "paid"), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
+    .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
   let extraCents = 0;
   let renewalsWithExtra = 0;
   for (const o of paid) {
@@ -84,14 +90,14 @@ async function periodNumbers(db: Db, accountId: string, from: Date, to: Date): P
   const started = await db
     .selectDistinct({ c: s.events.customerId })
     .from(s.events)
-    .where(and(eq(s.events.accountId, accountId), eq(s.events.type, "started"), gte(s.events.createdAt, from), lt(s.events.createdAt, to)));
+    .where(and(eq(s.events.accountId, accountId), fEvents(bf), eq(s.events.type, "started"), gte(s.events.createdAt, from), lt(s.events.createdAt, to)));
   const startedIds = started.map((x) => x.c).filter((x): x is string => !!x);
   let convertedFromStarted = 0;
   for (let i = 0; i < startedIds.length; i += 1000) {
     const r = await db
       .select({ n: sql<number>`count(distinct ${s.orders.customerId})::int` })
       .from(s.orders)
-      .where(and(eq(s.orders.status, "paid"), inArray(s.orders.customerId, startedIds.slice(i, i + 1000)), gte(s.orders.paidAt, from)));
+      .where(and(eq(s.orders.status, "paid"), inArray(s.orders.customerId, startedIds.slice(i, i + 1000)), fOrders(bf), gte(s.orders.paidAt, from)));
     convertedFromStarted += r[0]?.n ?? 0;
   }
 
@@ -103,19 +109,19 @@ async function periodNumbers(db: Db, accountId: string, from: Date, to: Date): P
     })
     .from(s.orders)
     .innerJoin(s.charges, eq(s.charges.orderId, s.orders.id))
-    .where(and(eq(s.orders.accountId, accountId), gte(s.orders.createdAt, from), lt(s.orders.createdAt, to)));
+    .where(and(eq(s.orders.accountId, accountId), fOrders(bf), gte(s.orders.createdAt, from), lt(s.orders.createdAt, to)));
 
   const ev = await db
     .select({ type: s.events.type, n: sql<number>`count(*)::int` })
     .from(s.events)
-    .where(and(eq(s.events.accountId, accountId), inArray(s.events.type, ["bump_offered", "bump_accepted"]), gte(s.events.createdAt, from), lt(s.events.createdAt, to)))
+    .where(and(eq(s.events.accountId, accountId), fEvents(bf), inArray(s.events.type, ["bump_offered", "bump_accepted"]), gte(s.events.createdAt, from), lt(s.events.createdAt, to)))
     .groupBy(s.events.type);
 
   // Vencimentos no período que não renovaram (perdidos).
   const [lost] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(s.accesses)
-    .where(and(eq(s.accesses.accountId, accountId), inArray(s.accesses.status, ["expired", "removed"]), isNotNull(s.accesses.expiresAt), gte(s.accesses.expiresAt, from), lt(s.accesses.expiresAt, to)));
+    .where(and(eq(s.accesses.accountId, accountId), fAccess(bf), inArray(s.accesses.status, ["expired", "removed"]), isNotNull(s.accesses.expiresAt), gte(s.accesses.expiresAt, from), lt(s.accesses.expiresAt, to)));
 
   return {
     revenueCents: paid.reduce((x, o) => x + o.total, 0),
@@ -148,17 +154,17 @@ function rates(p: PeriodNumbers) {
   };
 }
 
-export async function dashboard(db: Db, accountId: string, now: Date, tz: string, key: RangeKey, custom?: { from?: string; to?: string }) {
+export async function dashboard(db: Db, accountId: string, now: Date, tz: string, key: RangeKey, custom?: { from?: string; to?: string }, bf: BotFilter = null) {
   let { from, to } = rangeBounds(key, now, tz, custom);
   if (key === "all") {
-    const first = await db.select({ d: sql<Date | null>`min(${s.orders.paidAt})` }).from(s.orders).where(eq(s.orders.accountId, accountId));
+    const first = await db.select({ d: sql<Date | null>`min(${s.orders.paidAt})` }).from(s.orders).where(and(eq(s.orders.accountId, accountId), fOrders(bf)));
     const f = first[0]?.d ? new Date(first[0].d) : null;
     if (f) from = startOfDay(f, tz);
   }
   const len = to.getTime() - from.getTime();
   const prevFrom = new Date(from.getTime() - len);
-  const cur = await periodNumbers(db, accountId, from, to);
-  const prev = key === "all" ? null : await periodNumbers(db, accountId, prevFrom, from);
+  const cur = await periodNumbers(db, accountId, from, to, bf);
+  const prev = key === "all" ? null : await periodNumbers(db, accountId, prevFrom, from, bf);
 
   // Série por dia (ou por mês, em períodos longos).
   const byMonth = len > 95 * 86_400_000;
@@ -171,7 +177,7 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
       n: sql<number>`count(*)::int`,
     })
     .from(s.orders)
-    .where(and(eq(s.orders.accountId, accountId), eq(s.orders.status, "paid"), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)))
+    .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)))
     .groupBy(sql`1`, s.orders.kind);
   const days: { day: string; newCents: number; renewalCents: number; bundleCents: number; count: number }[] = [];
   {
@@ -197,12 +203,12 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
   const fr = await db
     .select({ type: s.events.type, n: sql<number>`count(distinct ${s.events.customerId})::int` })
     .from(s.events)
-    .where(and(eq(s.events.accountId, accountId), inArray(s.events.type, [...funnelTypes]), gte(s.events.createdAt, from), lt(s.events.createdAt, to)))
+    .where(and(eq(s.events.accountId, accountId), fEvents(bf), inArray(s.events.type, [...funnelTypes]), gte(s.events.createdAt, from), lt(s.events.createdAt, to)))
     .groupBy(s.events.type);
   const [paidPeople] = await db
     .select({ n: sql<number>`count(distinct ${s.orders.customerId})::int` })
     .from(s.orders)
-    .where(and(eq(s.orders.accountId, accountId), eq(s.orders.status, "paid"), inArray(s.orders.kind, ["new", "bundle", "recovery"]), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
+    .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), inArray(s.orders.kind, ["new", "bundle", "recovery"]), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
   const funnel = [
     { step: "Iniciaram o bot (/start)", n: fr.find((x) => x.type === "started")?.n ?? 0 },
     { step: "Viram os planos", n: fr.find((x) => x.type === "viewed_plans")?.n ?? 0 },
@@ -215,7 +221,7 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
   const paidOrders = await db
     .select({ botId: s.orders.botId, total: s.orders.totalCents, items: s.orders.items, kind: s.orders.kind })
     .from(s.orders)
-    .where(and(eq(s.orders.accountId, accountId), eq(s.orders.status, "paid"), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
+    .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
   const bots = await db.select({ id: s.bots.id, username: s.bots.username }).from(s.bots).where(eq(s.bots.accountId, accountId));
   const botRank = bots
     .map((b) => {
@@ -239,26 +245,26 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
 
   // Projeções.
   const d30 = rangeBounds("30d", now, tz);
-  const last30 = rates(await periodNumbers(db, accountId, d30.from, d30.to));
+  const last30 = rates(await periodNumbers(db, accountId, d30.from, d30.to, bf));
   const renewalRate = last30.renewal ?? 0.5;
   const in30 = new Date(now.getTime() + 30 * 86_400_000);
   const [due] = await db
     .select({ cents: sql<number>`coalesce(sum(coalesce(${s.plans.priceCents}, ${s.accesses.lastPriceCents}, 0)), 0)::int`, n: sql<number>`count(*)::int` })
     .from(s.accesses)
     .leftJoin(s.plans, eq(s.plans.id, s.accesses.planId))
-    .where(and(eq(s.accesses.accountId, accountId), eq(s.accesses.status, "active"), gt(s.accesses.expiresAt, now), lt(s.accesses.expiresAt, in30)));
+    .where(and(eq(s.accesses.accountId, accountId), fAccess(bf), eq(s.accesses.status, "active"), gt(s.accesses.expiresAt, now), lt(s.accesses.expiresAt, in30)));
   const monthB = rangeBounds("month", now, tz);
   const [mtd] = await db
     .select({ cents: sql<number>`coalesce(sum(${s.orders.totalCents}), 0)::int` })
     .from(s.orders)
-    .where(and(eq(s.orders.accountId, accountId), eq(s.orders.status, "paid"), gte(s.orders.paidAt, monthB.from), lt(s.orders.paidAt, now)));
+    .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), gte(s.orders.paidAt, monthB.from), lt(s.orders.paidAt, now)));
   const zNow = zoned(now, tz);
   const daysInMonth = new Date(Date.UTC(zNow.year, zNow.month, 0)).getUTCDate();
   const elapsed = Math.max(1 / 24, (now.getTime() - monthB.from.getTime()) / 86_400_000);
   const [actives] = await db
     .select({ n: sql<number>`count(distinct ${s.accesses.customerId})::int` })
     .from(s.accesses)
-    .where(and(eq(s.accesses.accountId, accountId), eq(s.accesses.status, "active"), or(sql`${s.accesses.expiresAt} is null`, gt(s.accesses.expiresAt, now))));
+    .where(and(eq(s.accesses.accountId, accountId), fAccess(bf), eq(s.accesses.status, "active"), or(sql`${s.accesses.expiresAt} is null`, gt(s.accesses.expiresAt, now))));
 
   return {
     range: { key, from, to, bucket },

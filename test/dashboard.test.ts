@@ -13,6 +13,7 @@ const { db, sql: pg } = createDb(URL);
 const now = new Date("2026-11-15T18:00:00Z"); // 15/11 15:00 em SP
 const TZ = "America/Sao_Paulo";
 let accountId = "";
+let botId = "";
 
 beforeAll(async () => {
   await runMigrations(URL);
@@ -21,6 +22,8 @@ beforeAll(async () => {
   accountId = a!.id;
   const [ch] = await db.insert(s.channels).values({ accountId, telegramChatId: -1, title: "VIP", type: "channel" }).returning();
   const [bot] = await db.insert(s.bots).values({ accountId, telegramBotId: 1, username: "vip_bot", name: "V", tokenEnc: encryptJson({ token: "1:x" }, "k".repeat(40)), webhookSecret: "w" }).returning();
+  botId = bot!.id;
+  const [bot2] = await db.insert(s.bots).values({ accountId, telegramBotId: 2, username: "outro_bot", name: "O", tokenEnc: encryptJson({ token: "2:x" }, "k".repeat(40)), webhookSecret: "w2" }).returning();
   const plan = (id: string, cents: number): OrderItem => ({ type: "plan", refId: id, name: "Mensal", channelIds: [ch!.id], durationUnit: "month", durationValue: 1, priceCents: cents });
   const cust = async (tg: number) => (await db.insert(s.customers).values({ accountId, telegramUserId: tg }).returning())[0]!;
   const today = new Date("2026-11-15T14:00:00Z");
@@ -29,9 +32,9 @@ beforeAll(async () => {
   const cs = await Promise.all([1, 2, 3, 4].map(cust));
   for (const c of cs) await db.insert(s.events).values({ accountId, customerId: c.id, botId: bot!.id, type: "started", createdAt: today });
   await db.insert(s.events).values([
-    { accountId, customerId: cs[0]!.id, type: "bump_offered", createdAt: today },
-    { accountId, customerId: cs[1]!.id, type: "bump_offered", createdAt: today },
-    { accountId, customerId: cs[0]!.id, type: "bump_accepted", createdAt: today },
+    { accountId, botId: bot!.id, customerId: cs[0]!.id, type: "bump_offered", createdAt: today },
+    { accountId, botId: bot!.id, customerId: cs[1]!.id, type: "bump_offered", createdAt: today },
+    { accountId, botId: bot!.id, customerId: cs[0]!.id, type: "bump_accepted", createdAt: today },
   ]);
   const order = async (c: string, kind: "new" | "renewal" | "bundle", items: OrderItem[], status: "paid" | "pending", at: Date) => {
     const total = items.reduce((x, i) => x + i.priceCents, 0);
@@ -41,10 +44,17 @@ beforeAll(async () => {
   await order(cs[0]!.id, "new", [plan("p1", 2490), { ...plan("x", 990), type: "extra", name: "Extra" }], "paid", today);
   await order(cs[1]!.id, "bundle", [{ ...plan("b1", 3990), type: "bundle", name: "Combo" }], "paid", today);
   await order(cs[2]!.id, "new", [plan("p1", 2490)], "pending", today);
+  // Outro bot: 1 /start e 1 venda hoje.
+  const o2 = await cust(50);
+  await db.insert(s.events).values({ accountId, customerId: o2.id, botId: bot2!.id, type: "started", createdAt: today });
+  {
+    const [o] = await db.insert(s.orders).values({ accountId, botId: bot2!.id, customerId: o2.id, kind: "new", items: [plan("p9", 1000)], subtotalCents: 1000, totalCents: 1000, status: "paid", createdAt: today, paidAt: today }).returning();
+    await db.insert(s.charges).values({ accountId, orderId: o!.id, provider: "pushinpay", amountCents: 1000, status: "paid", createdAt: today, paidAt: today });
+  }
   // Ontem: 1 renovação e 1 vencido que não renovou.
   const old = await cust(9);
   await order(old.id, "renewal", [plan("p1", 2490)], "paid", yesterday);
-  await db.insert(s.accesses).values({ accountId, customerId: cs[3]!.id, channelId: ch!.id, status: "removed", expiresAt: yesterday });
+  await db.insert(s.accesses).values({ accountId, billingBotId: bot!.id, customerId: cs[3]!.id, channelId: ch!.id, status: "removed", expiresAt: yesterday });
 });
 afterAll(async () => {
   await pg.end();
@@ -59,7 +69,7 @@ describe("dashboard", () => {
   });
 
   it("hoje: vendas, conversão, upsell e pacotes", async () => {
-    const d = await dashboard(db, accountId, now, TZ, "today");
+    const d = await dashboard(db, accountId, now, TZ, "today", undefined, [botId]);
     expect(d.current.revenueCents).toBe(2490 + 990 + 3990);
     expect(d.current.sales).toBe(2);
     expect(d.current.avgTicket).toBe(Math.round(7470 / 2));
@@ -73,17 +83,27 @@ describe("dashboard", () => {
   });
 
   it("ontem: taxa de renovação (1 renovou, 1 perdido)", async () => {
-    const d = await dashboard(db, accountId, now, TZ, "yesterday");
+    const d = await dashboard(db, accountId, now, TZ, "yesterday", undefined, [botId]);
     expect(d.current.renewal).toBe(0.5);
     expect(d.planRank[0]!.name).toBe("Mensal");
   });
 
   it("7 dias: série diária com 7 pontos e ranking de bots", async () => {
-    const d = await dashboard(db, accountId, now, TZ, "7d");
+    const d = await dashboard(db, accountId, now, TZ, "7d", undefined, [botId]);
     expect(d.series.length).toBe(7);
     expect(d.series.at(-1)!.day).toBe("2026-11-15");
     expect(d.series.at(-1)!.bundleCents).toBe(3990);
     expect(d.botRank[0]!.bot).toBe("vip_bot");
     expect(d.funnel[0]!.n).toBe(4);
+  });
+  it("filtro por bot", async () => {
+    const all = await dashboard(db, accountId, now, TZ, "today");
+    const one = await dashboard(db, accountId, now, TZ, "today", undefined, [botId]);
+    const none = await dashboard(db, accountId, now, TZ, "today", undefined, []);
+    expect(all.current.started).toBe(one.current.started + 1);
+    expect(all.current.revenueCents).toBe(one.current.revenueCents + 1000);
+    expect(one.botRank.map((b) => b.bot)).toEqual(["vip_bot"]);
+    expect(none.current.sales).toBe(0);
+    expect(none.funnel[0]!.n).toBe(0);
   });
 });

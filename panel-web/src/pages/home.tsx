@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { brl, get, type Me } from "../api";
+import { brl, get, type BotListItem, type Me } from "../api";
 import { Loading, useLoad } from "../ui";
 
 type RangeKey = "today" | "yesterday" | "7d" | "week" | "month" | "30d" | "all" | "custom";
@@ -89,7 +89,24 @@ export function HomePage({ me }: { me: Me }) {
   const [range, setRange] = useState<RangeKey>("7d");
   const today = isoDay(new Date());
   const [custom, setCustom] = useState({ from: isoDay(new Date(Date.now() - 13 * 86_400_000)), to: today });
-  const q = range === "custom" ? `range=custom&from=${custom.from}&to=${custom.to}` : `range=${range}`;
+  const bots = useLoad(() => get<BotListItem[]>("/api/bots"));
+  // Bots escolhidos (null = todos); fica salvo neste navegador.
+  const [sel, setSel] = useState<string[] | null>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("botly.dashBots") ?? "null");
+      return Array.isArray(v) ? v : null;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("botly.dashBots", JSON.stringify(sel));
+    } catch {}
+  }, [sel]);
+  // Ignora bots que não existem mais.
+  const valid = sel && bots.data ? sel.filter((id) => bots.data!.some((b) => b.id === id)) : sel;
+  const q = (range === "custom" ? `range=custom&from=${custom.from}&to=${custom.to}` : `range=${range}`) + (valid ? `&bots=${valid.join(",")}` : "");
   const d = useLoad(() => get<Dash>(`/api/dashboard?${q}`), [q]);
   const ov = useLoad(() => get<Overview>("/api/overview"));
   const first = me.user.name.split(" ")[0];
@@ -106,12 +123,15 @@ export function HomePage({ me }: { me: Me }) {
 
       {ov.data && pending.length > 0 && <Checklist data={ov.data} pending={pending.length} />}
 
-      <div className="period-bar" role="group" aria-label="Período">
-        {RANGES.map(([k, label]) => (
-          <button key={k} className={range === k ? "on" : ""} aria-pressed={range === k} onClick={() => setRange(k)}>
-            {label}
-          </button>
-        ))}
+      <div className="filters">
+        <div className="period-bar" role="group" aria-label="Período">
+          {RANGES.map(([k, label]) => (
+            <button key={k} className={range === k ? "on" : ""} aria-pressed={range === k} onClick={() => setRange(k)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {bots.data && bots.data.length > 1 && <BotPicker bots={bots.data} value={valid} onChange={setSel} />}
       </div>
       {range === "custom" && (
         <div className="row" style={{ marginBottom: 16 }}>
@@ -553,4 +573,62 @@ function niceTicks(max: number): number[] {
   for (let v = 0; v <= max + step * 0.001; v += step) out.push(Math.round(v));
   if (out[out.length - 1]! < max) out.push(out[out.length - 1]! + step);
   return out;
+}
+
+function BotPicker({ bots, value, onChange }: { bots: BotListItem[]; value: string[] | null; onChange: (v: string[] | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const all = value === null;
+  const label = all ? "Todos os bots" : value.length === 0 ? "Nenhum bot" : value.length === 1 ? `@${bots.find((b) => b.id === value[0])?.username}` : `${value.length} de ${bots.length} bots`;
+  const toggle = (id: string) => {
+    const cur = value ?? bots.map((b) => b.id);
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    onChange(next.length === bots.length ? null : next);
+  };
+  return (
+    <div className="bot-picker" ref={box}>
+      <button className={`btn${all ? "" : " filtered"}`} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        {label} <span aria-hidden>▾</span>
+      </button>
+      {open && (
+        <div className="bot-pop" role="group" aria-label="Bots no painel">
+          <label className="check">
+            <input type="checkbox" checked={all} onChange={() => onChange(all ? [] : null)} />
+            <strong>Todos os bots</strong>
+          </label>
+          <hr />
+          {bots.map((b) => (
+            <label key={b.id} className="check">
+              <input type="checkbox" checked={all || value!.includes(b.id)} onChange={() => toggle(b.id)} />
+              <span>
+                @{b.username}
+                {b.mainChannel && <small>{b.mainChannel}</small>}
+              </span>
+              <button
+                type="button"
+                className="only"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onChange([b.id]);
+                }}
+              >
+                só este
+              </button>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
