@@ -466,7 +466,7 @@ function OffersTab({ draft, setDraft, channels, plans, reload }: TabProps & { ch
                 </div>
               );
             })}
-            <p className="small muted">Sem preço aqui, vale o “preço como extra” definido em Canais.</p>
+            <p className="small muted">Sem preço aqui, vale o “preço como adicional” definido em Canais.</p>
           </div>
         ) : (
           <div className="note warn small">Cadastre outros canais para oferecer como extra.</div>

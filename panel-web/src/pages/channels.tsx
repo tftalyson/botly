@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { get, post, put, type BotListItem, type Channel } from "../api";
+import { del, get, post, put, type BotListItem, type Channel } from "../api";
 import { Loading, Modal, MoneyField, useAction, useLoad } from "../ui";
 
 export function ChannelsPage() {
@@ -77,7 +77,8 @@ function ChannelRow({ c, bots, reload }: { c: Channel; bots: BotListItem[]; relo
             </select>
           </label>
           <label className="field">
-            Preço como extra
+            Preço como adicional
+            <small>Quando outro bot oferece este canal junto (“adicionar por +R$” e “renovar + canal”). Vazio = não é oferecido.</small>
             <div className="row" style={{ flexWrap: "nowrap" }}>
               <MoneyField value={price} onChange={setPrice} placeholder="Ex.: 9,90" />
               {price !== c.extraPriceCents && (
@@ -105,6 +106,19 @@ function ChannelRow({ c, bots, reload }: { c: Channel; bots: BotListItem[]; relo
         </button>
         <button className="btn small ghost" disabled={busy} onClick={() => run(() => put(`/api/channels/${c.id}`, { active: !c.active }).then(reload), c.active ? "Canal desativado" : "Canal ativado")}>
           {c.active ? "Desativar" : "Ativar"}
+        </button>
+        <button
+          className="btn small ghost danger"
+          disabled={busy}
+          onClick={() => {
+            const msg = c.subscribers
+              ? `"${c.title}" tem ${c.subscribers} assinantes ativos. Remover do Botly apaga os acessos e lembretes deles (eles continuam no canal do Telegram, mas o Botly deixa de cobrar e remover). Continuar?`
+              : `Remover "${c.title}" do Botly? O canal no Telegram não é apagado.`;
+            if (!confirm(msg)) return;
+            void run(() => del(`/api/channels/${c.id}?confirmar=1`).then(reload), "Canal removido");
+          }}
+        >
+          Remover
         </button>
       </div>
     </div>

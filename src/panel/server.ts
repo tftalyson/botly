@@ -426,11 +426,21 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     return row;
   });
 
-  app.delete<{ Params: { id: string } }>("/api/channels/:id", async (req) => {
+  /**
+   * Remove o canal do Botly (o canal no Telegram não é apagado). Com assinantes, só
+   * com confirmação explícita (?confirmar=1): os acessos e lembretes dele somem junto.
+   */
+  app.delete<{ Params: { id: string }; Querystring: { confirmar?: string } }>("/api/channels/:id", async (req) => {
     const ch = await ownChannel(req, req.params.id);
-    const [{ n }] = (await db.select({ n: count() }).from(s.accesses).where(eq(s.accesses.channelId, ch.id))) as [{ n: number }];
-    if (n > 0) throw new HttpError(400, "Este canal tem assinantes. Desative em vez de apagar.");
+    const [{ n }] = (await db
+      .select({ n: count() })
+      .from(s.accesses)
+      .where(and(eq(s.accesses.channelId, ch.id), eq(s.accesses.status, "active"), or(isNull(s.accesses.expiresAt), gt(s.accesses.expiresAt, ctx.now()))))) as [{ n: number }];
+    if (n > 0 && req.query.confirmar !== "1") throw new HttpError(409, `Este canal tem ${n} assinantes ativos.`);
+    // Bots que vendiam este canal ficam sem canal principal.
+    await db.update(s.bots).set({ mainChannelId: null }).where(eq(s.bots.mainChannelId, ch.id));
     await db.delete(s.channels).where(eq(s.channels.id, ch.id));
+    await db.insert(s.auditLog).values({ accountId: ch.accountId, userId: req.user!.id, action: "canal_removido", meta: { title: ch.title, telegramChatId: ch.telegramChatId, activeSubscribers: n } });
     return { ok: true };
   });
 
