@@ -702,6 +702,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     fileName: z.string().min(1).max(200),
     data: z.string().min(10), // arquivo em base64
     planMap: z.record(z.string(), z.string().uuid().nullable()).optional(),
+    onlyActive: z.boolean().optional(),
   });
   async function readImport(req: FastifyRequest) {
     const b = importBody.parse(req.body);
@@ -754,6 +755,12 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
 
   app.post("/api/import/confirm", { bodyLimit: 20 * 1024 * 1024 }, async (req) => {
     const { b, bot, channel, analysis } = await readImport(req);
+    if (b.onlyActive) {
+      // Só os ativos: vencidos ficam de fora (não viram clientes no Botly).
+      const now = ctx.now();
+      analysis.customers = analysis.customers.filter((c) => c.expiresAt > now);
+      analysis.expired = 0;
+    }
     if (!analysis.customers.length) throw new HttpError(400, "Nenhum cliente válido para importar.");
     const r = await applyImport(ctx, { accountId: acc(req), botId: bot.id, channelId: channel.id, analysis, planMap: b.planMap ?? {}, fileName: b.fileName, userId: req.user!.id });
     // Já monta os lembretes dos importados.

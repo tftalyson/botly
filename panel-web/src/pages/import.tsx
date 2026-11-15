@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { brl, get, post, type BotListItem, type Channel } from "../api";
-import { Loading, useAction, useLoad } from "../ui";
+import { Loading, Toggle, useAction, useLoad } from "../ui";
 
 interface Group {
   key: string;
@@ -59,6 +59,7 @@ export function ImportPage() {
   const [prev, setPrev] = useState<Preview | null>(null);
   const [planMap, setPlanMap] = useState<Record<string, string | null>>({});
   const [done, setDone] = useState<Done | null>(null);
+  const [onlyActive, setOnlyActive] = useState(true);
   const { busy, run } = useAction();
 
   // Canal padrão = canal principal do bot escolhido.
@@ -85,7 +86,7 @@ export function ImportPage() {
     });
   const confirm = () =>
     run(async () => {
-      const r = await post<Done>("/api/import/confirm", { ...(await payload()), planMap });
+      const r = await post<Done>("/api/import/confirm", { ...(await payload()), planMap, onlyActive });
       setDone(r);
       setPrev(null);
       past.reload();
@@ -150,7 +151,9 @@ export function ImportPage() {
         </div>
       )}
 
-      {prev && <PreviewPanel prev={prev} planMap={planMap} setPlanMap={setPlanMap} busy={busy} onConfirm={confirm} onCancel={() => setPrev(null)} />}
+      {prev && (
+        <PreviewPanel prev={prev} planMap={planMap} setPlanMap={setPlanMap} onlyActive={onlyActive} setOnlyActive={setOnlyActive} busy={busy} onConfirm={confirm} onCancel={() => setPrev(null)} />
+      )}
 
       {done && (
         <div className="panel stack">
@@ -158,7 +161,7 @@ export function ImportPage() {
           <div className="grid-4">
             <Stat label="Clientes importados" value={done.stats.clientes} />
             <Stat label="Ativos (recebem lembretes)" value={done.stats.ativos} />
-            <Stat label="Já vencidos" value={done.stats.vencidos} />
+            {done.stats.vencidos > 0 && <Stat label="Já vencidos" value={done.stats.vencidos} />}
             <Stat label="Linhas ignoradas" value={done.stats.ignorados} />
           </div>
           <p className="small muted">
@@ -212,6 +215,8 @@ function PreviewPanel({
   prev,
   planMap,
   setPlanMap,
+  onlyActive,
+  setOnlyActive,
   busy,
   onConfirm,
   onCancel,
@@ -219,6 +224,8 @@ function PreviewPanel({
   prev: Preview;
   planMap: Record<string, string | null>;
   setPlanMap: (m: Record<string, string | null>) => void;
+  onlyActive: boolean;
+  setOnlyActive: (v: boolean) => void;
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -300,10 +307,13 @@ function PreviewPanel({
         </details>
       )}
 
+      <Toggle checked={onlyActive} onChange={setOnlyActive}>
+        Importar só os assinantes ativos ({prev.active}){prev.expired ? `, deixando de fora os ${prev.expired} já vencidos` : ""}
+      </Toggle>
       {unmapped > 0 && <div className="note warn small">{unmapped} ativos ficam sem plano. Eles recebem a lista de planos no lembrete, em vez do botão direto.</div>}
       <div className="row">
         <button className="btn primary" disabled={busy || !prev.customers} onClick={onConfirm}>
-          {busy ? "Importando…" : `Importar ${prev.customers} clientes`}
+          {busy ? "Importando…" : `Importar ${onlyActive ? prev.active : prev.customers} ${onlyActive ? "assinantes ativos" : "clientes"}`}
         </button>
         <button className="btn ghost" onClick={onCancel}>
           Cancelar

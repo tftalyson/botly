@@ -98,6 +98,11 @@ describe("importação pelo painel", () => {
     // Lembretes já planejados para os importados (ex.: vence 17/11 → D-1 amanhã).
     const ob = await db.select().from(s.outbox);
     expect(ob.length).toBeGreaterThan(0);
+    // Só ativos: em outro canal, o vencido fica de fora.
+    const [ch2] = await db.insert(s.channels).values({ accountId: acc!.id, telegramChatId: -200, title: "VIP 2", type: "channel", rightsOk: true }).returning();
+    const only = (await app.inject({ method: "POST", url: "/api/import/confirm", payload: { ...body, channelId: ch2!.id, planMap: prev.suggested, onlyActive: true }, headers: { cookie, "x-botly": "1" } })).json();
+    expect(only.stats.clientes).toBe(4);
+    expect(only.stats.vencidos).toBe(0);
     // Importar de novo não duplica nem encurta.
     const again = (await app.inject({ method: "POST", url: "/api/import/confirm", payload: { ...body, planMap: prev.suggested }, headers: { cookie, "x-botly": "1" } })).json();
     expect(again.stats.novos).toBe(0);
