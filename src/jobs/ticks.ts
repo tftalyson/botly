@@ -22,9 +22,10 @@ export async function reconcileCharges(ctx: Ctx, rt: BotlyRuntime) {
     .from(s.charges)
     .where(and(eq(s.charges.status, "pending"), isNotNull(s.charges.providerTxId), gt(s.charges.createdAt, since)));
   for (const c of pending) {
-    const every = POLL_MS[c.provider] ?? 60_000;
-    // Nos primeiros 2 minutos o aviso costuma chegar sozinho.
-    if (now - c.createdAt.getTime() < 2 * 60_000) continue;
+    // Nos primeiros 30 min (quando quase todo mundo paga) confere a cada minuto; depois, no ritmo do provedor.
+    const every = now - c.createdAt.getTime() < 30 * 60_000 ? 60_000 : (POLL_MS[c.provider] ?? 60_000);
+    // No primeiro minuto o aviso costuma chegar sozinho.
+    if (now - c.createdAt.getTime() < 60_000) continue;
     if (now - (lastPoll.get(c.id) ?? 0) < every) continue;
     lastPoll.set(c.id, now);
     try {

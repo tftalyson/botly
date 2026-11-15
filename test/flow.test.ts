@@ -163,7 +163,8 @@ describe("venda completa", () => {
     const early = await app.inject({ method: "POST", url: `/pay/pushinpay/${gatewayId}?token=wtok`, payload: { id: charge.providerTxId } });
     expect(early.json().paid).toBe(false);
     pixPaid.add(charge.providerTxId!);
-    const r = await app.inject({ method: "POST", url: `/pay/pushinpay/${gatewayId}?token=wtok`, payload: `id=${charge.providerTxId}&status=paid`, headers: { "content-type": "application/x-www-form-urlencoded" } });
+    // Token no caminho e id em maiúsculas (como alguns gateways mandam).
+    const r = await app.inject({ method: "POST", url: `/pay/pushinpay/${gatewayId}/wtok`, payload: `id=${charge.providerTxId!.toUpperCase()}&status=paid`, headers: { "content-type": "application/x-www-form-urlencoded" } });
     expect(r.json().paid).toBe(true);
     const again = await app.inject({ method: "POST", url: `/pay/pushinpay/${gatewayId}?token=wtok`, payload: { id: charge.providerTxId } });
     expect(again.json().paid).toBe(false);

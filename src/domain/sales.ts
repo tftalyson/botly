@@ -80,7 +80,7 @@ export async function createPixForOrder(ctx: Ctx, orderId: string, opts: { avoid
         ref: `B${charge!.id}`,
         description: `Pedido ${order.id.slice(0, 8)}`,
         expiresAt,
-        webhookUrl: `${ctx.publicUrl.replace(/\/+$/, "")}/pay/${g.provider}/${g.id}?token=${g.webhookToken}`,
+        webhookUrl: `${ctx.publicUrl.replace(/\/+$/, "")}/pay/${g.provider}/${g.id}/${g.webhookToken}`,
       });
       const [saved] = await ctx.db.update(s.charges).set({ providerTxId: pix.txId, pixCode: pix.code }).where(eq(s.charges.id, charge!.id)).returning();
       return { charge: saved!, pix };
