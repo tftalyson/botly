@@ -1,0 +1,86 @@
+// API do painel: primeiro acesso, login, bots, canais, planos, pacotes e pagamentos.
+import { sql } from "drizzle-orm";
+import type { Transformer } from "grammy";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createDb } from "../src/db/client.js";
+import { runMigrations } from "../src/db/migrate.js";
+import type { Ctx } from "../src/domain/context.js";
+import { silentLog } from "../src/lib/log.js";
+import { buildPanel } from "../src/panel/server.js";
+
+const URL = process.env.DATABASE_URL ?? "postgres://postgres:dev@127.0.0.1:5432/botly_test";
+const { db, sql: pg } = createDb(URL);
+const tg: Transformer = async (_p, method, payload: any) => {
+  const ok = (result: unknown) => ({ ok: true, result }) as any;
+  if (method === "getMe") return ok({ id: 555, is_bot: true, first_name: "Painel Bot", username: "PainelBot" });
+  if (method === "getChat") return ok({ id: payload.chat_id, type: "channel", title: `Canal ${payload.chat_id}` });
+  if (method === "getChatMember") return ok({ status: "administrator", user: { id: 555 }, can_invite_users: true, can_restrict_members: true });
+  if (method === "createChatInviteLink") return ok({ invite_link: `https://t.me/+x${payload.chat_id}` });
+  return ok(true);
+};
+const ctx: Ctx = { db, appSecret: "y".repeat(40), publicUrl: "https://api.teste", fetch, now: () => new Date(), log: silentLog };
+const app = buildPanel(ctx, { transformer: tg, webDir: "/nao-existe" });
+let cookie = "";
+const call = async (method: string, url: string, payload?: unknown) => {
+  const r = await app.inject({ method: method as any, url, payload: payload as any, headers: { cookie, ...(method !== "GET" ? { "x-botly": "1" } : {}) } });
+  const set = r.headers["set-cookie"];
+  if (set) cookie = String(set).split(";")[0]!;
+  return { status: r.statusCode, body: r.body ? JSON.parse(r.body) : null };
+};
+
+beforeAll(async () => {
+  await runMigrations(URL);
+  await db.execute(sql`truncate accounts, super_admins cascade`);
+});
+afterAll(async () => {
+  await app.close();
+  await pg.end();
+});
+
+describe("painel", () => {
+  it("primeiro acesso cria conta e dono, e só funciona uma vez", async () => {
+    expect((await call("GET", "/api/setup")).body.needed).toBe(true);
+    expect((await call("POST", "/api/setup", { accountName: "Top", name: "Talyson", email: "t@x.com", password: "fraca" })).status).toBe(400);
+    expect((await call("POST", "/api/setup", { accountName: "Top", name: "Talyson", email: "t@x.com", password: "senha1234" })).status).toBe(200);
+    expect((await call("GET", "/api/me")).body.user.name).toBe("Talyson");
+    expect((await call("POST", "/api/setup", { accountName: "B", name: "B", email: "b@x.com", password: "senha1234" })).status).toBe(403);
+  });
+
+  it("exige login e o cabeçalho do painel", async () => {
+    const saved = cookie;
+    cookie = "";
+    expect((await call("GET", "/api/bots")).status).toBe(401);
+    expect((await call("POST", "/api/login", { email: "t@x.com", password: "errada1" })).status).toBe(401);
+    expect((await call("POST", "/api/login", { email: "T@X.com", password: "senha1234" })).status).toBe(200);
+    const r = await app.inject({ method: "POST", url: "/api/bots", payload: { token: "x" }, headers: { cookie } });
+    expect(r.statusCode).toBe(403);
+    cookie = saved;
+  });
+
+  it("bots, canais, planos, pacotes e pagamento", async () => {
+    expect((await call("POST", "/api/bots", { token: "abc" })).body.error).toContain("Token inválido");
+    const bot = await call("POST", "/api/bots", { token: "555:" + "B".repeat(35) });
+    expect(bot.body.username).toBe("PainelBot");
+    const c1 = await call("POST", "/api/channels", { botId: bot.body.id, chat: "-1001" });
+    const c2 = await call("POST", "/api/channels", { botId: bot.body.id, chat: "-1002" });
+    expect(c1.body.rights.ok).toBe(true);
+    const chans = (await call("GET", "/api/channels")).body;
+    expect(chans.length).toBe(2);
+    expect(chans[0].managerBot.username).toBe("PainelBot");
+    const plan = await call("POST", `/api/bots/${bot.body.id}/plans`, { name: "Mensal", durationUnit: "month", durationValue: 1, priceCents: 2490 });
+    expect(plan.status).toBe(200);
+    expect((await call("POST", "/api/bundles", { name: "Combo", durationUnit: "month", durationValue: 1, priceCents: 3990, channelIds: [c1.body.id] })).status).toBe(400);
+    expect((await call("POST", "/api/bundles", { name: "Combo", durationUnit: "month", durationValue: 1, priceCents: 3990, channelIds: [c1.body.id, c2.body.id] })).status).toBe(200);
+    const gw = await call("POST", "/api/gateways", { provider: "pushinpay", label: "Push", key: "token-de-teste-123" });
+    const upd = await call("PUT", `/api/bots/${bot.body.id}`, { mainChannelId: c1.body.id, routing: { mode: "alternar", gatewayIds: [gw.body.id] }, welcome: { text: "Oi!", media: null } });
+    expect(upd.status).toBe(200);
+    const list = (await call("GET", "/api/bots")).body;
+    expect(list[0].mainChannel).toBe("Canal -1001");
+    expect(list[0].hasPayment).toBe(true);
+    const gws = (await call("GET", "/api/gateways")).body;
+    expect(gws[0].bots).toEqual(["PainelBot"]);
+    expect(JSON.stringify(gws)).not.toContain("token-de-teste");
+    const ov = (await call("GET", "/api/overview")).body;
+    expect(ov.checklist).toEqual({ gateway: true, bot: true, channel: true, mainChannel: true, plans: true, routing: true });
+  });
+});

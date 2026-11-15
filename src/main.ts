@@ -19,8 +19,13 @@ if (e.BOTLY_ROLE === "api") {
   const server = buildApi(ctx, rt);
   startTicks(ctx, rt);
   await server.listen({ host: "0.0.0.0", port: e.PORT });
+} else if (e.BOTLY_ROLE === "panel") {
+  const { buildPanel } = await import("./panel/server.js");
+  const ctx: Ctx = { db, appSecret: e.APP_SECRET, publicUrl: e.PUBLIC_URL, fetch, now: () => new Date(), log };
+  const app = buildPanel(ctx, { secureCookies: e.NODE_ENV === "production" });
+  await app.listen({ host: "0.0.0.0", port: e.PORT });
 } else {
-  // Painel e super admin: em construção.
+  // Super admin: em construção.
   const Fastify = (await import("fastify")).default;
   const app = Fastify({ logger: true });
   app.get("/health", async () => ({ ok: true, role: e.BOTLY_ROLE }));

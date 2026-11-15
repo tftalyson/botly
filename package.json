@@ -3,15 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Botly — plataforma multi-conta para vender acesso a canais do Telegram por bots (planos, Pix, upsell, renovação e corte automáticos)",
+  "description": "Botly \u2014 plataforma multi-conta para vender acesso a canais do Telegram por bots (planos, Pix, upsell, renova\u00e7\u00e3o e corte autom\u00e1ticos)",
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && vite build --config panel-web/vite.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p panel-web/tsconfig.json",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "build:web": "vite build --config panel-web/vite.config.ts",
+    "dev:panel": "vite --config panel-web/vite.config.ts"
   },
   "engines": {
     "node": ">=22"
@@ -26,9 +28,16 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
     "drizzle-kit": "^0.31.11",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
+    "vite": "^8.3.8",
     "vitest": "^5.0.3"
   }
 }

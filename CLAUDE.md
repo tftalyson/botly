@@ -51,10 +51,12 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 - `src/api/server.ts`: `/tg/:botId` (confere o segredo do Telegram) e `/pay/:provider/:gatewayId?token=` (sempre confere na API do gateway).
 - `src/jobs/ticks.ts`: conferência de Pix pendentes a cada minuto (PushinPay a cada 5 min por cobrança), por 24 h.
 - `src/cli/setup.ts`: configuração pelo Console do Easypanel enquanto o painel não existe (conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, listar).
-- Testes: `test/flow.test.ts` (Telegram e PushinPay simulados, fluxo inteiro).
+- Painel (`BOTLY_ROLE=panel`, `src/panel/server.ts` + `panel-web/`): primeiro acesso cria conta + dono (usa a conta do Console se já existir), login por cookie, Início (vendas de hoje, assinantes, passos para começar), Bots (conectar com passo a passo do BotFather; página do bot com abas Geral/Planos/Pagamento/Ofertas e prévia do chat ao vivo), Canais (bot gestor, preço como extra, conferir permissões, adicionar pelo ID), Pacotes, Formas de pagamento (chave criptografada, testar), Configurações (maioridade, canal de avisos).
+- Visual do painel: névoa fria #EEF0F6, tinta violeta #1A1633, marca #5B2EFF, verde-água #0E9F86 só para dinheiro; títulos Bricolage Grotesque, texto Figtree. Elemento marcante = prévia do chat na página do bot.
+- Testes: `test/flow.test.ts` (Telegram e PushinPay simulados, fluxo inteiro) e `test/panel.test.ts` (API do painel).
 
 ## Ainda falta (próximas etapas)
-- Painel web (bots, canais, planos, pacotes, gateways, clientes, retenção, lembretes, dashboard) e super admin.
+- Painel: Clientes, Retenção, Lembretes, Dashboard completo (gráficos, ranking), upload de mídia, super admin.
 - Lembretes de vencimento, corte (simulação primeiro), recuperação de Pix, oferta pós-venda, importação.
 
 ## A validar
