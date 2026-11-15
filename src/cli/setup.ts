@@ -9,15 +9,18 @@
 //   boasvindas @usuario_do_bot "texto" [url da imagem ou vídeo]
 //   previas @usuario_do_bot <link> ["texto do botão"]
 //   avisos <id do canal de avisos>
+//   clientes                                       últimos clientes (ID, usuário, acessos)
+//   remover @usuario_do_bot <ID ou @usuario do cliente>   tira o cliente do canal principal do bot (ele pode voltar se pagar)
 //   listar
 import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
-import { eq, ilike } from "drizzle-orm";
+import { and, desc, eq, ilike } from "drizzle-orm";
 import { createDb } from "../db/client.js";
 import { runMigrations } from "../db/migrate.js";
 import * as s from "../db/schema.js";
 import type { Ctx } from "../domain/context.js";
 import { registerBot, registerChannel } from "../domain/setup.js";
+import { removeFromChannel } from "../domain/removal.js";
 import { encryptJson } from "../lib/crypto.js";
 import { log } from "../lib/log.js";
 import { brl } from "../lib/money.js";
@@ -132,6 +135,36 @@ try {
       console.log("✅ Canal de avisos de venda definido (o bot precisa ser admin dele).");
       break;
     }
+    case "clientes": {
+      const a = await account();
+      const rows = await db.select().from(s.customers).where(eq(s.customers.accountId, a.id)).orderBy(desc(s.customers.lastSeenAt)).limit(20);
+      const chans = await db.select().from(s.channels).where(eq(s.channels.accountId, a.id));
+      for (const c of rows) {
+        const accs = await db.select().from(s.accesses).where(eq(s.accesses.customerId, c.id));
+        const info = accs.map((x) => `${chans.find((ch) => ch.id === x.channelId)?.title ?? "?"}: ${x.status}${x.expiresAt ? " até " + x.expiresAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }) : ""}`).join("; ");
+        console.log(`  ${c.telegramUserId} ${c.username ? "@" + c.username : c.firstName ?? ""} · ${c.funnelStage} · ${brl(c.totalSpentCents)}${info ? " · " + info : ""}`);
+      }
+      if (!rows.length) console.log("  Nenhum cliente ainda.");
+      break;
+    }
+    case "remover": {
+      const b = await botBy(args[0] ?? "");
+      const who = (args[1] ?? "").replace(/^@/, "");
+      if (!who) throw new Error("Use: remover @bot <ID ou @usuario do cliente>");
+      const ch = b.mainChannelId ? (await db.select().from(s.channels).where(eq(s.channels.id, b.mainChannelId)))[0] : undefined;
+      if (!ch) throw new Error("Esse bot não tem canal principal.");
+      const cust = (
+        await db
+          .select()
+          .from(s.customers)
+          .where(and(eq(s.customers.accountId, b.accountId), /^\d+$/.test(who) ? eq(s.customers.telegramUserId, Number(who)) : ilike(s.customers.username, who)))
+      )[0];
+      if (!cust) throw new Error(`Cliente ${args[1]} não encontrado. Veja a lista com: clientes`);
+      const manager = ch.managerBotId ? (await db.select().from(s.bots).where(eq(s.bots.id, ch.managerBotId)))[0]! : b;
+      await removeFromChannel(ctx, apiForToken(botToken(manager, appSecret)), { channel: ch, customer: cust, reason: "manual" });
+      console.log(`✅ ${cust.username ? "@" + cust.username : cust.telegramUserId} removido do "${ch.title}". O acesso ficou como removido; se pagar de novo, volta.`);
+      break;
+    }
     case "listar": {
       const a = await account();
       console.log(`Conta: ${a.name}`);
@@ -146,7 +179,7 @@ try {
       break;
     }
     default:
-      console.log("Comandos: conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, listar");
+      console.log("Comandos: conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, clientes, remover, listar");
   }
 } catch (err) {
   console.error("❌ " + (err as Error).message);

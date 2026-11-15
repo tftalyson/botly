@@ -79,6 +79,11 @@ export async function registerChannel(ctx: Ctx, bot: typeof s.bots.$inferSelect,
   const type = chat.type === "channel" ? "channel" : chat.type === "supergroup" ? "supergroup" : "group";
   const title = "title" in chat && chat.title ? chat.title : String(chat.id);
   const rights = await checkRights(api, chat.id, bot.telegramBotId, chat.type === "channel");
+  // Canal/grupo público: qualquer um entra pelo @usuario sem pagar. VIP precisa ser privado.
+  if ("username" in chat && chat.username) {
+    rights.ok = false;
+    rights.missing.push("ser privado (público, qualquer um entra sem pagar)");
+  }
   const existing = (await ctx.db.select().from(s.channels).where(and(eq(s.channels.accountId, bot.accountId), eq(s.channels.telegramChatId, chat.id))))[0];
   // Só o bot gestor cria o link (os outros bots apenas vendem o canal).
   const isManager = !existing?.managerBotId || existing.managerBotId === bot.id;

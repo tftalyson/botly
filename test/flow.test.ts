@@ -17,6 +17,7 @@ import { createRuntime } from "../src/bot/runtime.js";
 import { apiForToken } from "../src/bot/api.js";
 import { buildApi } from "../src/api/server.js";
 import { gatewayOrder } from "../src/payments/routing.js";
+import { removeFromChannel } from "../src/domain/removal.js";
 
 const URL = process.env.DATABASE_URL ?? "postgres://postgres:dev@127.0.0.1:5432/botly_test";
 const SECRET = "x".repeat(40);
@@ -113,6 +114,9 @@ describe("venda completa", () => {
     const { channel: vip, rights } = await registerChannel(ctx, b, api, VIP);
     expect(rights.ok).toBe(true);
     expect(sent("createChatInviteLink")[0]!.payload.creates_join_request).toBe(true);
+    const pub = await registerChannel(ctx, b, apiForToken(TOKEN, async (prev, m, pl: any) => (m === "getChat" ? ({ ok: true, result: { id: -1009, type: "channel", title: "Público", username: "publico" } } as any) : tg(prev, m, pl))), -1009);
+    expect(pub.rights.ok).toBe(false);
+    await db.delete(s.channels).where(eq(s.channels.id, pub.channel.id));
     const { channel: extra } = await registerChannel(ctx, b, api, EXTRA);
     await db.update(s.channels).set({ extraPriceCents: 990 }).where(eq(s.channels.id, extra.id));
     const [p] = await db.insert(s.plans).values({ accountId, botId, name: "Mensal", durationUnit: "month", durationValue: 1, priceCents: 2490 }).returning();
@@ -197,6 +201,18 @@ describe("venda completa", () => {
     const vip = (await db.select().from(s.channels).where(eq(s.channels.telegramChatId, VIP)))[0]!;
     const acc = (await db.select().from(s.accesses).where(eq(s.accesses.channelId, vip.id)))[0]!;
     expect(acc.expiresAt!.toISOString()).toBe("2027-01-15T13:00:00.000Z");
+  });
+});
+
+describe("remoção", () => {
+  it("bane e desbane, e o acesso fica removido", async () => {
+    const vip = (await db.select().from(s.channels).where(eq(s.channels.telegramChatId, VIP)))[0]!;
+    const cust = (await db.select().from(s.customers).where(eq(s.customers.telegramUserId, USER)))[0]!;
+    await removeFromChannel(ctx, apiForToken(TOKEN, tg), { channel: vip, customer: cust, reason: "manual" });
+    expect(sent("banChatMember").at(-1)!.payload.user_id).toBe(USER);
+    expect(sent("unbanChatMember").at(-1)!.payload.only_if_banned).toBe(true);
+    const acc = (await db.select().from(s.accesses).where(eq(s.accesses.channelId, vip.id)))[0]!;
+    expect(acc.status).toBe("removed");
   });
 });
 
