@@ -138,8 +138,10 @@ describe("venda completa", () => {
   });
 
   it("planos → order bump → Pix", async () => {
+    const edits = sent("editMessageText").length;
     await rt.handle(botId, cb("plans") as any);
     expect(lastText()).toContain("Escolha seu plano");
+    expect(sent("editMessageText").length).toBe(edits); // nova mensagem, histórico preservado
     await rt.handle(botId, cb(`p:${planId}`) as any);
     expect(lastText()).toContain("VIP Trans");
     const order = (await db.select().from(s.orders))[0]!;
@@ -173,6 +175,9 @@ describe("venda completa", () => {
     expect(c.totalSpentCents).toBe(3480);
     expect(c.purchases).toBe(1);
     expect(lastText()).toContain("Pagamento confirmado");
+    // O Pix (QR + código) some da conversa na confirmação.
+    expect(sent("deleteMessage").map((c) => c.payload.message_id)).toEqual(expect.arrayContaining(charge.chatMessageIds));
+    expect(charge.chatMessageIds.length).toBe(2);
     await app.close();
   });
 

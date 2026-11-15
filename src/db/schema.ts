@@ -346,6 +346,8 @@ export const charges = pgTable(
     providerTxId: text("provider_tx_id"),
     amountCents: integer("amount_cents").notNull(),
     pixCode: text("pix_code"),
+    /** Mensagens do Pix no chat (QR e código): apagadas ao gerar outro Pix ou ao confirmar. */
+    chatMessageIds: jsonb("chat_message_ids").$type<number[]>().notNull().default([]),
     status: text("status", { enum: ["pending", "paid", "expired", "failed", "refunded"] }).notNull().default("pending"),
     /** Taxa da plataforma desta cobrança (split). Gravada mesmo quando é 0. */
     platformFeeCents: integer("platform_fee_cents").notNull().default(0),

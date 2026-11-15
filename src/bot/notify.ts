@@ -28,6 +28,12 @@ export async function announcePaid(ctx: Ctx, rt: BotlyRuntime, r: PaidResult) {
   }
   try {
     const api = await rt.api(order.botId);
+    // Confirmação: some o Pix (QR e código) da conversa, fica só a confirmação.
+    const pixMsgs = await ctx.db.select({ id: s.charges.id, ids: s.charges.chatMessageIds }).from(s.charges).where(eq(s.charges.orderId, order.id));
+    for (const p of pixMsgs) {
+      for (const mid of p.ids) await api.deleteMessage(customer.telegramUserId, mid).catch(() => {});
+      if (p.ids.length) await ctx.db.update(s.charges).set({ chatMessageIds: [] }).where(eq(s.charges.id, p.id));
+    }
     await api.sendMessage(
       customer.telegramUserId,
       `✅ <b>Pagamento confirmado!</b>\n\n${lines.join("\n")}\n\nToque no botão abaixo e peça para entrar — eu aprovo na hora.`,

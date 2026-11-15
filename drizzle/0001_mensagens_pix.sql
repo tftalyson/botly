@@ -1,0 +1,1 @@
+ALTER TABLE "charges" ADD COLUMN "chat_message_ids" jsonb DEFAULT '[]'::jsonb NOT NULL;

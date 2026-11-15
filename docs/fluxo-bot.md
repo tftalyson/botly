@@ -3,8 +3,13 @@
 Exemplo com os planos do @TopHotwifes_bot. Todos os textos, mídias, preços e
 ofertas são editáveis no painel. `[Botão]` = botão clicável.
 
-Regra geral: o bot **edita a mesma mensagem** sempre que dá (trocar de plano,
-voltar), para a conversa não virar uma pilha de mensagens.
+Regra geral (ajustada em 15/11): cada passo manda uma mensagem **nova** e a conversa
+guarda o histórico. Só some/é trocado:
+- o menu de compra ao trocar de plano/pacote, voltar e na oferta do extra (edita a mesma mensagem);
+- o menu de compra quando o Pix é gerado;
+- o Pix anterior ao "Gerar outro Pix";
+- o Pix (QR + código) quando o pagamento é confirmado (fica só a confirmação);
+- o aviso de 18 anos depois de confirmar.
 
 ---
 

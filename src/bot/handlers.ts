@@ -52,18 +52,21 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     return touchCustomer(ctx, L.account.id, botId, c.from!, source);
   }
 
-  /** Mostra uma tela: edita a mensagem do botão quando dá; senão manda uma nova. */
-  async function show(c: Context, text: string, kb?: InlineKeyboard) {
-    const opts = { parse_mode: "HTML" as const, reply_markup: kb, link_preview_options: { is_disabled: true } };
-    if (c.callbackQuery?.message && "text" in c.callbackQuery.message) {
+  /**
+   * Mostra uma tela. Por padrão manda uma mensagem NOVA (a conversa guarda o histórico).
+   * replace = edita a mensagem do botão: só ao trocar de plano/pacote no menu de compra.
+   */
+  async function show(c: Context, text: string, kb?: InlineKeyboard, opts: { replace?: boolean } = {}) {
+    const o = { parse_mode: "HTML" as const, reply_markup: kb, link_preview_options: { is_disabled: true } };
+    if (opts.replace && c.callbackQuery?.message && "text" in c.callbackQuery.message) {
       try {
-        await c.editMessageText(text, opts);
+        await c.editMessageText(text, o);
         return;
       } catch {
         /* mensagem antiga ou com mídia: manda nova */
       }
     }
-    await c.reply(text, opts);
+    await c.reply(text, o);
   }
 
   // ───────────── Entrada ─────────────
@@ -138,19 +141,19 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
 
   // ───────────── Planos e pacotes ─────────────
 
-  async function plansScreen(c: Context) {
+  async function plansScreen(c: Context, replace = false) {
     const L = await load();
     const { customer } = await who(c, L);
     await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "viewed_plans" });
     await advanceFunnel(ctx, customer.id, "viewed_plans");
     if (!L.plans.length) {
-      await show(c, "Nenhum plano disponível no momento. Volte mais tarde 🙏");
+      await show(c, "Nenhum plano disponível no momento. Volte mais tarde 🙏", undefined, { replace });
       return;
     }
     const kb = new InlineKeyboard();
     for (const p of L.plans) kb.text(`${p.highlight ? "⭐ " : ""}${p.name} — ${brl(p.priceCents)}`, `p:${p.id}`).row();
     if (L.bot.showBundles && (await activeBundles(L.account.id)).length) kb.text("🔥 Pacotes promocionais", "bundles").row();
-    await show(c, "💎 <b>Escolha seu plano:</b>", kb);
+    await show(c, "💎 <b>Escolha seu plano:</b>", kb, { replace });
   }
 
   async function activeBundles(accountId: string) {
@@ -166,6 +169,11 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     await c.answerCallbackQuery();
     await plansScreen(c);
   });
+  // Voltar dos pacotes para os planos: troca a mesma mensagem.
+  bot.callbackQuery("plans:back", async (c) => {
+    await c.answerCallbackQuery();
+    await plansScreen(c, true);
+  });
 
   bot.callbackQuery("bundles", async (c) => {
     await c.answerCallbackQuery();
@@ -179,8 +187,8 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       const n = counts.filter((x) => x.bundleId === b.id).length;
       kb.text(`${b.name} (${n} canais, ${durationLabel(b.durationUnit, b.durationValue)}) — ${brl(b.priceCents)}`, `bun:${b.id}`).row();
     }
-    kb.text("⬅️ Voltar", "plans");
-    await show(c, "🔥 <b>Pacotes</b> — vários canais por um preço só:", kb);
+    kb.text("⬅️ Voltar", "plans:back");
+    await show(c, "🔥 <b>Pacotes</b> — vários canais por um preço só:", kb, { replace: true });
   });
 
   // ───────────── Escolha → order bump → Pix ─────────────
@@ -217,10 +225,11 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
           .text(`✅ Sim, adicionar (total ${brl(plan.priceCents + bump.priceCents)})`, `bump:y:${order.id}`)
           .row()
           .text("Não, só o plano", `bump:n:${order.id}`),
+        { replace: true },
       );
       return;
     }
-    await pay(c, L, order.id);
+    await pay(c, L, order.id, { fromMenu: true });
   });
 
   bot.callbackQuery(/^bump:(y|n):(.+)$/, async (c) => {
@@ -249,7 +258,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       await recordDecline(ctx, customer.id, bump.channel.id);
       await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "bump_declined", meta: { channelId: bump.channel.id } });
     }
-    await pay(c, L, order.id);
+    await pay(c, L, order.id, { fromMenu: true });
   });
 
   bot.callbackQuery(/^bun:(.+)$/, async (c) => {
@@ -269,10 +278,15 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       source: customer.source,
       items: [{ type: "bundle", refId: b.id, name: b.name, channelIds: chans.map((x) => x.channelId), durationUnit: b.durationUnit, durationValue: b.durationValue, priceCents: b.priceCents }],
     });
-    await pay(c, L, order.id);
+    await pay(c, L, order.id, { fromMenu: true });
   });
 
-  async function pay(c: Context, L: Loaded, orderId: string, avoidGatewayId?: string | null) {
+  /**
+   * Gera e manda o Pix. Apaga o menu de escolha (fromMenu) ou o Pix anterior do
+   * mesmo pedido ("Gerar outro Pix"), para não ficar Pix velho na conversa.
+   */
+  async function pay(c: Context, L: Loaded, orderId: string, opts: { avoidGatewayId?: string | null; fromMenu?: boolean } = {}) {
+    const avoidGatewayId = opts.avoidGatewayId;
     const order = (await ctx.db.select().from(s.orders).where(eq(s.orders.id, orderId)))[0]!;
     let res;
     try {
@@ -296,13 +310,29 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       (order.discountCents ? `🏷 Desconto: −${brl(order.discountCents)}\n` : "") +
       `💰 <b>Total: ${brl(order.totalCents)}</b>\n\n` +
       `Copie o código Pix abaixo e pague no app do seu banco.\n⏳ O Pix vale por ${PIX_VALID_MINUTES} minutos. A liberação é automática.`;
-    if (c.callbackQuery?.message) await c.deleteMessage().catch(() => {});
-    if (res.pix.qrBase64) await c.replyWithPhoto(new InputFile(Buffer.from(res.pix.qrBase64, "base64"), "pix.png"), { caption, parse_mode: "HTML" });
-    else await c.reply(caption, { parse_mode: "HTML" });
-    await c.reply(`<code>${esc(res.pix.code)}</code>`, {
+    if (opts.fromMenu && c.callbackQuery?.message) await c.deleteMessage().catch(() => {});
+    await deletePixMessages(c, orderId, res.charge.id);
+    const ids: number[] = [];
+    const first = res.pix.qrBase64
+      ? await c.replyWithPhoto(new InputFile(Buffer.from(res.pix.qrBase64, "base64"), "pix.png"), { caption, parse_mode: "HTML" })
+      : await c.reply(caption, { parse_mode: "HTML" });
+    ids.push(first.message_id);
+    const code = await c.reply(`<code>${esc(res.pix.code)}</code>`, {
       parse_mode: "HTML",
       reply_markup: new InlineKeyboard().text("✅ Já paguei", `chk:${res.charge.id}`).row().text("🔁 Gerar outro Pix", `new:${orderId}`),
     });
+    ids.push(code.message_id);
+    await ctx.db.update(s.charges).set({ chatMessageIds: ids }).where(eq(s.charges.id, res.charge.id));
+  }
+
+  /** Apaga as mensagens de Pix anteriores deste pedido (menos a cobrança atual). */
+  async function deletePixMessages(c: Context, orderId: string, keepChargeId: string) {
+    const olds = await ctx.db.select({ id: s.charges.id, ids: s.charges.chatMessageIds }).from(s.charges).where(eq(s.charges.orderId, orderId));
+    for (const o of olds) {
+      if (o.id === keepChargeId || !o.ids.length) continue;
+      for (const mid of o.ids) await c.api.deleteMessage(c.chat!.id, mid).catch(() => {});
+      await ctx.db.update(s.charges).set({ chatMessageIds: [] }).where(eq(s.charges.id, o.id));
+    }
   }
 
   bot.callbackQuery(/^chk:(.+)$/, async (c) => {
@@ -332,7 +362,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const order = (await ctx.db.select().from(s.orders).where(and(eq(s.orders.id, c.match[1]!), eq(s.orders.customerId, customer.id))))[0];
     if (!order || order.status !== "pending") return;
     const last = (await ctx.db.select().from(s.charges).where(eq(s.charges.orderId, order.id)).orderBy(desc(s.charges.createdAt)).limit(1))[0];
-    await pay(c, L, order.id, last?.gatewayId);
+    await pay(c, L, order.id, { avoidGatewayId: last?.gatewayId });
   });
 
   // ───────────── Minha assinatura ─────────────
