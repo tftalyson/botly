@@ -59,5 +59,9 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 - Painel: Clientes, Retenção, Lembretes, Dashboard completo (gráficos, ranking), upload de mídia, super admin.
 - Lembretes de vencimento, corte (simulação primeiro), recuperação de Pix, oferta pós-venda, importação.
 
+## Confirmado em produção
+- 15/11: compra real com PushinPay (R$ 1,00, bot de teste @cervoadmbot, canal privado "Cervo – Atualizações"): Pix gerado e pagamento reconhecido NA HORA pelo aviso da PushinPay (token no caminho do endereço).
+- Em canal o app não mostra "banir usuários": só "Adicionar inscritos" é exigido.
+
 ## A validar
 - Split da PushinPay (campo de divisão no cashIn): conferir na documentação antes de ligar a taxa.
