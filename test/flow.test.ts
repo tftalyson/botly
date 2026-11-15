@@ -294,6 +294,9 @@ describe("atendimento", () => {
     now = new Date("2026-12-11T03:00:00Z"); // 00:00 em São Paulo
     await rt.handle(botId, cb("sup:human") as any);
     expect(lastText()).toContain("atendimento é das 10:00 às 22:00");
+    // Pode seguir comprando sozinho com a conversa aberta.
+    await rt.handle(botId, cb("plans") as any);
+    expect(JSON.stringify([...calls].reverse().find((c) => c.method === "sendMessage" || c.method === "editMessageText")!.payload.reply_markup)).toContain('"p:');
     await rt.handle(botId, cb("sup:end") as any);
     now = before;
   });

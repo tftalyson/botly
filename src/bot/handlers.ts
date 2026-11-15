@@ -579,7 +579,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const { customer } = await who(c, L);
     const open = await openTicketFor(ctx, customer.id, botId);
     if (open) {
-      await show(c, "💬 Você já está em atendimento. É só escrever aqui que a gente responde.", new InlineKeyboard().text("✖️ Encerrar atendimento", "sup:end"));
+      await show(c, "💬 Você já está em atendimento. É só escrever aqui que a gente responde.", new InlineKeyboard().text("💎 Ver planos", "plans").text("🏠 Início", "home").row().text("✖️ Encerrar atendimento", "sup:end"));
       return;
     }
     const isMember = (await activeList(customer.id)).length > 0;
@@ -642,12 +642,14 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const isMember = (await activeList(customer.id)).length > 0;
     const { created } = await openTicket(ctx, { accountId: L.account.id, customerId: customer.id, botId, topic: isMember ? "assinante" : "antes de comprar" });
     const open = isSupportOpen(L.account.settings, ctx.now());
+    // Mesmo com a conversa aberta, o cliente pode seguir comprando/renovando sozinho.
+    const kb = new InlineKeyboard().text(isMember ? "🔄 Renovar / mudar de plano" : "💎 Ver planos", "plans").row().text("🏠 Início", "home").text("✖️ Encerrar atendimento", "sup:end");
     await show(
       c,
       open
         ? "✅ Pronto! Escreva sua dúvida aqui (pode mandar foto do comprovante, se for o caso). Um atendente já vai responder nesta conversa."
-        : offHoursText(L.account.settings),
-      new InlineKeyboard().text("✖️ Encerrar atendimento", "sup:end"),
+        : `${offHoursText(L.account.settings)}\n\nEnquanto isso, você pode ver os planos e comprar ou renovar sozinho pelos botões abaixo.`,
+      kb,
     );
     if (created) await notifyTicket(L, customer);
   });
