@@ -13,10 +13,12 @@
 //   remover @usuario_do_bot <ID ou @usuario do cliente>   tira o cliente do canal principal do bot (ele pode voltar se pagar)
 //   testar-lembrete @usuario_do_bot <ID ou @usuario do cliente> [dias]
 //                                                  manda AGORA a mensagem daquele dia (-3, -1, 0 = antes/no dia; 1, 7 = volte)
+//   vendas [dias] [todas]                          vendas pagas dos últimos dias (padrão 1); com 'todas', inclui Pix não pagos
+//   apagar-vendas <código> [<código>...]           apaga vendas de TESTE (pedido, Pix, acesso liberado e números do painel)
 //   listar
 import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
-import { and, desc, eq, ilike } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, inArray, sql as dsql } from "drizzle-orm";
 import { createDb } from "../db/client.js";
 import { runMigrations } from "../db/migrate.js";
 import * as s from "../db/schema.js";
@@ -193,6 +195,51 @@ try {
       console.log(last.status === "sent" ? `✅ Mensagem de ${days} dia(s) enviada para ${cust.username ? "@" + cust.username : cust.telegramUserId}.` : `⚠️ Não enviada: ${last.error ?? last.status}`);
       break;
     }
+    case "vendas": {
+      const a = await account();
+      const days = Number(args[0] ?? 1) || 1;
+      const all = args.includes("todas");
+      const since = new Date(Date.now() - days * 86_400_000);
+      const rows = await db
+        .select({ o: s.orders, c: s.customers, b: s.bots.username })
+        .from(s.orders)
+        .innerJoin(s.customers, eq(s.customers.id, s.orders.customerId))
+        .leftJoin(s.bots, eq(s.bots.id, s.orders.botId))
+        .where(and(eq(s.orders.accountId, a.id), all ? gte(s.orders.createdAt, since) : and(eq(s.orders.status, "paid"), gte(s.orders.paidAt, since))))
+        .orderBy(desc(s.orders.createdAt));
+      if (!rows.length) console.log("  Nenhuma venda paga nesse período.");
+      for (const r of rows)
+        console.log(
+          `  ${r.o.id.slice(0, 8)}  ${(r.o.paidAt ?? r.o.createdAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}  ${brl(r.o.totalCents)}  ${r.o.status === "paid" ? "PAGA" : r.o.status}  ${r.o.kind}  @${r.b ?? "?"}  cliente ${r.c.username ? "@" + r.c.username : r.c.telegramUserId}  (${r.o.items.map((i) => i.name).join(" + ")})`,
+        );
+      break;
+    }
+    case "apagar-vendas": {
+      const a = await account();
+      const codes = args.map((x) => x.trim().toLowerCase()).filter(Boolean);
+      if (!codes.length) throw new Error("Use: apagar-vendas <código> [<código>...] (veja os códigos com: vendas)");
+      const all = await db.select().from(s.orders).where(eq(s.orders.accountId, a.id));
+      const list = all.filter((o) => codes.some((c) => o.id.startsWith(c)));
+      const missing = codes.filter((c) => !all.some((o) => o.id.startsWith(c)));
+      if (missing.length) throw new Error(`Código não encontrado: ${missing.join(", ")}`);
+      for (const o of list) {
+        await db.transaction(async (tx) => {
+          // Acesso liberado por esta venda: some (era teste).
+          await tx.delete(s.accesses).where(eq(s.accesses.lastOrderId, o.id));
+          // Números do cliente e eventos desta venda (painel).
+          if (o.status === "paid")
+            await tx
+              .update(s.customers)
+              .set({ totalSpentCents: dsql`greatest(0, ${s.customers.totalSpentCents} - ${o.totalCents})`, purchases: dsql`greatest(0, ${s.customers.purchases} - 1)` })
+              .where(eq(s.customers.id, o.customerId));
+          await tx.delete(s.events).where(and(eq(s.events.accountId, a.id), dsql`${s.events.meta}->>'orderId' = ${o.id}`));
+          await tx.delete(s.orders).where(eq(s.orders.id, o.id)); // cobranças saem junto
+        });
+        console.log(`✅ Apagada ${o.id.slice(0, 8)} (${brl(o.totalCents)}).`);
+      }
+      void inArray;
+      break;
+    }
     case "listar": {
       const a = await account();
       console.log(`Conta: ${a.name}`);
@@ -207,7 +254,7 @@ try {
       break;
     }
     default:
-      console.log("Comandos: conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, clientes, remover, testar-lembrete, listar");
+      console.log("Comandos: conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, clientes, remover, testar-lembrete, vendas, apagar-vendas, listar");
   }
 } catch (err) {
   console.error("❌ " + (err as Error).message);
