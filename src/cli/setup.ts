@@ -11,6 +11,8 @@
 //   avisos <id do canal de avisos>
 //   clientes                                       últimos clientes (ID, usuário, acessos)
 //   remover @usuario_do_bot <ID ou @usuario do cliente>   tira o cliente do canal principal do bot (ele pode voltar se pagar)
+//   testar-lembrete @usuario_do_bot <ID ou @usuario do cliente> [dias]
+//                                                  manda AGORA a mensagem daquele dia (-3, -1, 0 = antes/no dia; 1, 7 = volte)
 //   listar
 import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
@@ -21,6 +23,8 @@ import * as s from "../db/schema.js";
 import type { Ctx } from "../domain/context.js";
 import { registerBot, registerChannel } from "../domain/setup.js";
 import { removeFromChannel } from "../domain/removal.js";
+import { ensureTemplates, sendDue } from "../domain/retention.js";
+import { createRuntime } from "../bot/runtime.js";
 import { encryptJson } from "../lib/crypto.js";
 import { log } from "../lib/log.js";
 import { brl } from "../lib/money.js";
@@ -165,6 +169,30 @@ try {
       console.log(`✅ ${cust.username ? "@" + cust.username : cust.telegramUserId} removido do "${ch.title}". O acesso ficou como removido; se pagar de novo, volta.`);
       break;
     }
+    case "testar-lembrete": {
+      const b = await botBy(args[0] ?? "");
+      const who = (args[1] ?? "").replace(/^@/, "");
+      const days = args[2] !== undefined ? Number(args[2]) : -1;
+      if (!who || !Number.isFinite(days)) throw new Error("Use: testar-lembrete @bot <ID ou @usuario do cliente> [dias]");
+      const cust = (
+        await db
+          .select()
+          .from(s.customers)
+          .where(and(eq(s.customers.accountId, b.accountId), /^\d+$/.test(who) ? eq(s.customers.telegramUserId, Number(who)) : ilike(s.customers.username, who)))
+      )[0];
+      if (!cust) throw new Error(`Cliente ${args[1]} não encontrado. Veja a lista com: clientes`);
+      const acc = (await db.select().from(s.accesses).where(and(eq(s.accesses.customerId, cust.id), eq(s.accesses.channelId, b.mainChannelId ?? ""))))[0];
+      if (!acc) throw new Error("Esse cliente não tem acesso ao canal principal deste bot (precisa ter comprado).");
+      const tpls = await ensureTemplates(ctx, b.accountId);
+      const tpl = tpls.find((x) => Math.round(x.offsetMinutes / 1440) === days);
+      if (!tpl) throw new Error(`Não há mensagem para ${days} dia(s). Existentes: ${tpls.map((x) => Math.round(x.offsetMinutes / 1440)).join(", ")}`);
+      if (tpl.kind === "reminder" && acc.status !== "active") throw new Error("O acesso desse cliente não está ativo (lembrete de antes de vencer só vai para ativos). Teste com dias 1 ou 7 (volte).");
+      await db.insert(s.outbox).values({ accountId: b.accountId, botId: b.id, customerId: cust.id, accessId: acc.id, templateId: tpl.id, dedupeKey: `teste:${Date.now()}`, scheduledFor: new Date(), expectedCents: acc.lastPriceCents ?? 0 });
+      await sendDue(ctx, createRuntime(ctx));
+      const last = (await db.select().from(s.outbox).where(eq(s.outbox.customerId, cust.id)).orderBy(desc(s.outbox.createdAt)).limit(1))[0]!;
+      console.log(last.status === "sent" ? `✅ Mensagem de ${days} dia(s) enviada para ${cust.username ? "@" + cust.username : cust.telegramUserId}.` : `⚠️ Não enviada: ${last.error ?? last.status}`);
+      break;
+    }
     case "listar": {
       const a = await account();
       console.log(`Conta: ${a.name}`);
@@ -179,7 +207,7 @@ try {
       break;
     }
     default:
-      console.log("Comandos: conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, clientes, remover, listar");
+      console.log("Comandos: conta, gateway, bot, canal, plano, pagamento, boasvindas, previas, avisos, clientes, remover, testar-lembrete, listar");
   }
 } catch (err) {
   console.error("❌ " + (err as Error).message);
