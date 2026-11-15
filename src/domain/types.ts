@@ -17,6 +17,10 @@ export interface AccountSettings {
   removeGraceHours?: number;
   /** Dias sem repetir uma oferta recusada. Padrão 30. */
   offerCooldownDays?: number;
+  /** Atendimento humano: horário (HH:mm) e mensagem fora do horário. */
+  supportStart?: string;
+  supportEnd?: string;
+  supportOffMessage?: string;
 }
 
 export interface TemplateMedia {

@@ -29,6 +29,13 @@
       "when": 1794764555330,
       "tag": "0003_nome_exibicao",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794771126413,
+      "tag": "0004_atendimento",
+      "breakpoints": true
     }
   ]
 }

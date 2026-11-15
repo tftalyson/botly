@@ -17,6 +17,8 @@ import { gatewayClient } from "../payments/gateway.js";
 import { dashboard, type RangeKey } from "./dashboard.js";
 import { analyze, applyImport, readSheet, suggestPlans } from "../domain/importer.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
+import { agentReply, assume, closeTicket, isSupportOpen, supportHours } from "../domain/support.js";
+import { InlineKeyboard } from "grammy";
 import { hashPassword, LoginLimiter, newToken, passwordProblem, tokenHash, verifyPassword } from "./auth.js";
 
 const COOKIE = "botly_sess";
@@ -60,6 +62,13 @@ const MIME: Record<string, string> = {
   ".css": "text/css",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".mp4": "video/mp4",
+  ".oga": "audio/ogg",
+  ".ogg": "audio/ogg",
+  ".pdf": "application/pdf",
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
   ".json": "application/json",
@@ -856,6 +865,214 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     const bots = await db.select({ id: s.bots.id, username: s.bots.username }).from(s.bots).where(eq(s.bots.accountId, acc(req)));
     const chans = await db.select({ id: s.channels.id, title: s.channels.title }).from(s.channels).where(eq(s.channels.accountId, acc(req)));
     return rows.map((r) => ({ id: r.id, fileName: r.fileName, createdAt: r.createdAt, stats: r.stats, bot: bots.find((x) => x.id === r.botId)?.username ?? null, channel: chans.find((x) => x.id === r.channelId)?.title ?? null }));
+  });
+
+  // ─── Atendimento ───
+
+  const ticketOf = async (req: FastifyRequest, id: string) => {
+    const t = (await db.select().from(s.supportTickets).where(and(eq(s.supportTickets.id, id), eq(s.supportTickets.accountId, acc(req)))))[0];
+    if (!t) throw new HttpError(404, "Conversa não encontrada.");
+    return t;
+  };
+  const ticketApi = async (t: typeof s.supportTickets.$inferSelect) => {
+    const b = t.botId ? (await db.select().from(s.bots).where(eq(s.bots.id, t.botId)))[0] : undefined;
+    if (!b) throw new HttpError(400, "O bot desta conversa não existe mais.");
+    return { bot: b, api: tgApi(b) };
+  };
+  const agentOf = async (req: FastifyRequest) => {
+    const u = (await db.select().from(s.users).where(eq(s.users.id, req.user!.id)))[0]!;
+    return { id: u.id, name: u.supportName?.trim() || u.name };
+  };
+
+  app.get("/api/support", async (req) => {
+    const q = z.object({ status: z.enum(["open", "active", "closed"]).optional() }).parse(req.query);
+    const rows = await db
+      .select({ t: s.supportTickets, c: s.customers, bot: s.bots.username })
+      .from(s.supportTickets)
+      .innerJoin(s.customers, eq(s.customers.id, s.supportTickets.customerId))
+      .leftJoin(s.bots, eq(s.bots.id, s.supportTickets.botId))
+      .where(and(eq(s.supportTickets.accountId, acc(req)), q.status ? eq(s.supportTickets.status, q.status) : undefined))
+      .orderBy(desc(s.supportTickets.lastMessageAt))
+      .limit(q.status === "closed" ? 50 : 200);
+    const ids = rows.map((r) => r.t.id);
+    const last = ids.length
+      ? await db.execute(sql`select distinct on (ticket_id) ticket_id, sender, text, media_type from support_messages where ticket_id in (${sql.join(ids.map((i) => sql`${i}::uuid`), sql`, `)}) order by ticket_id, created_at desc`)
+      : [];
+    const lastBy = new Map((last as unknown as { ticket_id: string; sender: string; text: string | null; media_type: string | null }[]).map((m) => [m.ticket_id, m]));
+    const counts = await db
+      .select({ status: s.supportTickets.status, n: count() })
+      .from(s.supportTickets)
+      .where(and(eq(s.supportTickets.accountId, acc(req)), inArray(s.supportTickets.status, ["open", "active"])))
+      .groupBy(s.supportTickets.status);
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
+    return {
+      counts: { open: counts.find((c) => c.status === "open")?.n ?? 0, active: counts.find((c) => c.status === "active")?.n ?? 0 },
+      isOpenNow: isSupportOpen(a.settings, ctx.now()),
+      hours: supportHours(a.settings),
+      tickets: rows.map((r) => {
+        const m = lastBy.get(r.t.id);
+        return {
+          id: r.t.id,
+          status: r.t.status,
+          topic: r.t.topic,
+          agentName: r.t.agentName,
+          unread: r.t.unread,
+          lastMessageAt: r.t.lastMessageAt,
+          bot: r.bot,
+          customer: { name: [r.c.firstName, r.c.lastName].filter(Boolean).join(" ") || null, username: r.c.username, telegramUserId: r.c.telegramUserId },
+          preview: m ? { sender: m.sender, text: m.text ?? (m.media_type === "photo" ? "📷 Foto" : m.media_type ? "📎 Arquivo" : "") } : null,
+        };
+      }),
+    };
+  });
+
+  // Contador leve para o menu (aguardando + mensagens não lidas).
+  app.get("/api/support-count", async (req) => {
+    const r = await db
+      .select({ waiting: sql<number>`count(*) filter (where ${s.supportTickets.status} = 'open')::int`, unread: sql<number>`coalesce(sum(${s.supportTickets.unread}), 0)::int` })
+      .from(s.supportTickets)
+      .where(and(eq(s.supportTickets.accountId, acc(req)), inArray(s.supportTickets.status, ["open", "active"])));
+    return r[0] ?? { waiting: 0, unread: 0 };
+  });
+
+  app.get("/api/support/:id", async (req) => {
+    const t = await ticketOf(req, (req.params as { id: string }).id);
+    const c = (await db.select().from(s.customers).where(eq(s.customers.id, t.customerId)))[0]!;
+    const msgs = await db.select().from(s.supportMessages).where(eq(s.supportMessages.ticketId, t.id)).orderBy(asc(s.supportMessages.createdAt));
+    const accesses = await db
+      .select({ a: s.accesses, ch: s.channels })
+      .from(s.accesses)
+      .innerJoin(s.channels, eq(s.channels.id, s.accesses.channelId))
+      .where(eq(s.accesses.customerId, c.id));
+    const orders = await db
+      .select({ o: s.orders, bot: s.bots.username })
+      .from(s.orders)
+      .leftJoin(s.bots, eq(s.bots.id, s.orders.botId))
+      .where(eq(s.orders.customerId, c.id))
+      .orderBy(desc(s.orders.createdAt))
+      .limit(10);
+    const past = await db
+      .select({ n: count() })
+      .from(s.supportTickets)
+      .where(and(eq(s.supportTickets.customerId, c.id), eq(s.supportTickets.status, "closed")));
+    if (t.unread) await db.update(s.supportTickets).set({ unread: 0 }).where(eq(s.supportTickets.id, t.id));
+    const bot = t.botId ? (await db.select({ username: s.bots.username }).from(s.bots).where(eq(s.bots.id, t.botId)))[0]?.username : null;
+    return {
+      ticket: { id: t.id, status: t.status, topic: t.topic, agentName: t.agentName, createdAt: t.createdAt, bot },
+      customer: {
+        id: c.id,
+        name: [c.firstName, c.lastName].filter(Boolean).join(" ") || null,
+        username: c.username,
+        telegramUserId: c.telegramUserId,
+        totalSpentCents: c.totalSpentCents,
+        purchases: c.purchases,
+        since: c.firstSeenAt,
+        pastTickets: past[0]?.n ?? 0,
+      },
+      accesses: accesses.map((r) => ({ id: r.a.id, channel: r.ch.displayName?.trim() || r.ch.title, status: r.a.status, expiresAt: r.a.expiresAt })),
+      orders: orders.map((r) => ({ id: r.o.id, createdAt: r.o.createdAt, status: r.o.status, kind: r.o.kind, totalCents: r.o.totalCents, items: r.o.items.map((i) => i.name), bot: r.bot })),
+      messages: msgs.map((m) => ({ id: m.id, sender: m.sender, text: m.text, mediaType: m.mediaType, agentName: m.agentName, createdAt: m.createdAt })),
+    };
+  });
+
+  app.post("/api/support/:id/reply", async (req) => {
+    const t = await ticketOf(req, (req.params as { id: string }).id);
+    const p = z.object({ text: z.string().trim().min(1, "Escreva a mensagem.").max(3500) }).parse(req.body);
+    if (t.status === "closed") throw new HttpError(400, "Esta conversa já foi encerrada.");
+    const { api } = await ticketApi(t);
+    try {
+      await agentReply(ctx, api, t, await agentOf(req), p.text);
+    } catch (err) {
+      if (/blocked|deactivated|chat not found/i.test(String(err))) throw new HttpError(400, "O cliente bloqueou o bot, a mensagem não foi entregue.");
+      throw err;
+    }
+    return { ok: true };
+  });
+
+  app.post("/api/support/:id/assume", async (req) => {
+    const t = await ticketOf(req, (req.params as { id: string }).id);
+    if (t.status === "closed") throw new HttpError(400, "Esta conversa já foi encerrada.");
+    const { api } = await ticketApi(t);
+    await assume(ctx, api, t, await agentOf(req));
+    return { ok: true };
+  });
+
+  app.post("/api/support/:id/close", async (req) => {
+    const t = await ticketOf(req, (req.params as { id: string }).id);
+    if (t.status === "closed") return { ok: true };
+    const { api } = await ticketApi(t).catch(() => ({ api: null }));
+    await closeTicket(ctx, api, t, "agent", (await agentOf(req)).name);
+    return { ok: true };
+  });
+
+  // Ação rápida: reenviar os botões de entrada nos canais ativos.
+  app.post("/api/support/:id/send-links", async (req) => {
+    const t = await ticketOf(req, (req.params as { id: string }).id);
+    const { api } = await ticketApi(t);
+    const c = (await db.select().from(s.customers).where(eq(s.customers.id, t.customerId)))[0]!;
+    const rows = await db
+      .select({ a: s.accesses, ch: s.channels })
+      .from(s.accesses)
+      .innerJoin(s.channels, eq(s.channels.id, s.accesses.channelId))
+      .where(and(eq(s.accesses.customerId, c.id), eq(s.accesses.status, "active")));
+    const now = ctx.now();
+    const kb = new InlineKeyboard();
+    let n = 0;
+    for (const r of rows)
+      if ((!r.a.expiresAt || r.a.expiresAt > now) && r.ch.inviteLink) {
+        kb.url(`🔓 Entrar no ${r.ch.displayName?.trim() || r.ch.title}`, r.ch.inviteLink).row();
+        n++;
+      }
+    if (!n) throw new HttpError(400, "O cliente não tem nenhum acesso ativo com link.");
+    await api.sendMessage(c.telegramUserId, "Aqui estão os links dos seus canais. Toque e depois em “Pedir para entrar”:", { reply_markup: kb });
+    const { addMessage } = await import("../domain/support.js");
+    await addMessage(ctx, t, { sender: "system", text: "Links dos canais reenviados." });
+    return { ok: true };
+  });
+
+  // Ação rápida: estender um acesso por N dias.
+  app.post("/api/support/:id/extend", async (req) => {
+    const t = await ticketOf(req, (req.params as { id: string }).id);
+    const p = z.object({ accessId: z.string().uuid(), days: z.number().int().min(1).max(365) }).parse(req.body);
+    const a = (await db.select().from(s.accesses).where(and(eq(s.accesses.id, p.accessId), eq(s.accesses.customerId, t.customerId))))[0];
+    if (!a) throw new HttpError(404, "Acesso não encontrado.");
+    if (!a.expiresAt) throw new HttpError(400, "Este acesso é vitalício.");
+    const base = a.expiresAt > ctx.now() ? a.expiresAt : ctx.now();
+    const exp = new Date(base.getTime() + p.days * 86_400_000);
+    await db.update(s.accesses).set({ expiresAt: exp, status: "active" }).where(eq(s.accesses.id, a.id));
+    const { addMessage } = await import("../domain/support.js");
+    await addMessage(ctx, t, { sender: "system", text: `Acesso estendido em ${p.days} dia(s).` });
+    return { ok: true, expiresAt: exp };
+  });
+
+  // Foto/arquivo enviado pelo cliente (baixa do Telegram pelo bot da conversa).
+  app.get("/api/support/file/:messageId", async (req, reply) => {
+    const m = (await db.select().from(s.supportMessages).where(and(eq(s.supportMessages.id, (req.params as { messageId: string }).messageId), eq(s.supportMessages.accountId, acc(req)))))[0];
+    if (!m?.tgFileId) throw new HttpError(404, "Arquivo não encontrado.");
+    const t = (await db.select().from(s.supportTickets).where(eq(s.supportTickets.id, m.ticketId)))[0]!;
+    const { bot, api } = await ticketApi(t);
+    const f = await api.getFile(m.tgFileId).catch(() => null);
+    if (!f?.file_path) throw new HttpError(404, "O Telegram não entregou o arquivo (pode ter expirado).");
+    const res = await fetch(`https://api.telegram.org/file/bot${botToken(bot, ctx.appSecret)}/${f.file_path}`);
+    if (!res.ok) throw new HttpError(502, "Não consegui baixar o arquivo do Telegram.");
+    const ext = extname(f.file_path ?? "").toLowerCase();
+    reply.header("Cache-Control", "private, max-age=86400");
+    return reply.type(MIME[ext] ?? "application/octet-stream").send(Buffer.from(await res.arrayBuffer()));
+  });
+
+  app.get("/api/support-settings", async (req) => {
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
+    const u = (await db.select().from(s.users).where(eq(s.users.id, req.user!.id)))[0]!;
+    return { ...supportHours(a.settings), offMessage: a.settings.supportOffMessage ?? "", supportName: u.supportName ?? "", defaultName: u.name };
+  });
+
+  app.put("/api/support-settings", async (req) => {
+    const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Horário no formato 10:00.");
+    const p = z.object({ start: hhmm, end: hhmm, offMessage: z.string().max(1000), supportName: z.string().trim().max(40) }).parse(req.body);
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
+    await db.update(s.accounts).set({ settings: { ...a.settings, supportStart: p.start, supportEnd: p.end, supportOffMessage: p.offMessage.trim() || undefined }, updatedAt: ctx.now() }).where(eq(s.accounts.id, a.id));
+    await db.update(s.users).set({ supportName: p.supportName || null }).where(eq(s.users.id, req.user!.id));
+    return { ok: true };
   });
 
   // ─── Configurações da conta ───

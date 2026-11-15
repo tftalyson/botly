@@ -71,6 +71,8 @@ export const users = pgTable(
     name: text("name").notNull(),
     passwordHash: text("password_hash").notNull(),
     role: text("role", { enum: ["owner", "admin", "operator"] }).notNull().default("owner"),
+    /** Nome que aparece para o cliente no atendimento ("Talyson: ..."). */
+    supportName: text("support_name"),
     active: boolean("active").notNull().default(true),
     lastLoginAt: ts("last_login_at"),
     createdAt: createdAt(),
@@ -515,4 +517,47 @@ export const media = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("media_account").on(t.accountId)],
+);
+
+/** Conversa de atendimento (uma aberta por cliente + bot). */
+export const supportTickets = pgTable(
+  "support_tickets",
+  {
+    id: id(),
+    accountId: accountId(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    botId: uuid("bot_id").references(() => bots.id, { onDelete: "set null" }),
+    /** open = aguardando atendente; active = em atendimento; closed = encerrada. */
+    status: text("status", { enum: ["open", "active", "closed"] }).notNull().default("open"),
+    assignedUserId: uuid("assigned_user_id").references(() => users.id, { onDelete: "set null" }),
+    agentName: text("agent_name"),
+    /** Assunto escolhido no menu (dúvida antes de comprar, não consegue entrar...). */
+    topic: text("topic"),
+    unread: integer("unread").notNull().default(0),
+    lastMessageAt: ts("last_message_at").notNull().defaultNow(),
+    createdAt: createdAt(),
+    closedAt: ts("closed_at"),
+  },
+  (t) => [index("support_account_status").on(t.accountId, t.status, t.lastMessageAt), index("support_customer").on(t.customerId)],
+);
+
+export const supportMessages = pgTable(
+  "support_messages",
+  {
+    id: id(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => supportTickets.id, { onDelete: "cascade" }),
+    accountId: accountId(),
+    sender: text("sender", { enum: ["customer", "agent", "system"] }).notNull(),
+    text: text("text"),
+    /** Foto/arquivo do cliente: file_id do Telegram (no bot da conversa). */
+    mediaType: text("media_type", { enum: ["photo", "document", "video", "voice"] }),
+    tgFileId: text("tg_file_id"),
+    agentName: text("agent_name"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("support_messages_ticket").on(t.ticketId, t.createdAt)],
 );

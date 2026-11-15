@@ -20,6 +20,7 @@ import type { OrderItem } from "../domain/types.js";
 import { brl } from "../lib/money.js";
 import { DEFAULT_TZ, durationLabel, fmtDate } from "../lib/time.js";
 import { announcePaid } from "./notify.js";
+import { closeTicket, isSupportOpen, offHoursText, openTicket, openTicketFor, addMessage } from "../domain/support.js";
 import type { BotlyRuntime } from "./runtime.js";
 
 export const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -138,23 +139,37 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     await show(c, "Tudo bem! Se mudar de ideia, é só mandar /start.");
   });
 
+  /** Acessos ativos do cliente (todos os canais da conta). */
+  async function activeList(customerId: string) {
+    const rows = await ctx.db
+      .select({ a: s.accesses, ch: s.channels })
+      .from(s.accesses)
+      .innerJoin(s.channels, eq(s.channels.id, s.accesses.channelId))
+      .where(and(eq(s.accesses.customerId, customerId), eq(s.accesses.status, "active")));
+    const now = ctx.now();
+    return rows.filter((r) => !r.a.expiresAt || r.a.expiresAt > now);
+  }
+
+  /** Menu de quem já é assinante: o que tem, renovar/upgrade, outros canais e suporte. */
+  async function memberMenu(c: Context, L: Loaded, active: Awaited<ReturnType<typeof activeList>>) {
+    const lines = active.map((r) => `• <b>${esc(chName(r.ch))}</b> — ${r.a.expiresAt ? `até ${fmtDate(r.a.expiresAt, L.tz)}` : "vitalício"}`);
+    const kb = new InlineKeyboard();
+    for (const r of active) if (r.ch.inviteLink) kb.url(`🔓 Entrar no ${chName(r.ch)}`, r.ch.inviteLink).row();
+    kb.text("🔄 Renovar / mudar de plano", "plans").row();
+    if (await hasMore(L, active.map((r) => r.ch.id))) kb.text("➕ Outros canais e pacotes", "more").row();
+    kb.text("💬 Suporte", "sup");
+    await c.reply(`✅ <b>Seus acessos</b>\n${lines.join("\n")}`, { parse_mode: "HTML", reply_markup: kb });
+  }
+
   async function welcome(c: Context, L: Loaded, customer: Customer) {
-    if (L.main) {
-      const acc = await activeAccess(ctx, customer.id, L.main.id);
-      if (acc) {
-        const kb = new InlineKeyboard().text("🔄 Renovar agora", "plans").row();
-        if (L.main.inviteLink) kb.url(`🔗 Entrar no ${chName(L.main)}`, L.main.inviteLink).row();
-        await c.reply(
-          acc.expiresAt
-            ? `✅ Seu acesso ao <b>${esc(chName(L.main))}</b> está ativo até <b>${fmtDate(acc.expiresAt, L.tz)}</b>.`
-            : `✅ Seu acesso ao <b>${esc(chName(L.main))}</b> é <b>vitalício</b>.`,
-          { parse_mode: "HTML", reply_markup: kb },
-        );
-        return;
-      }
+    const active = await activeList(customer.id);
+    if (active.length) {
+      await memberMenu(c, L, active);
+      return;
     }
     const kb = new InlineKeyboard().text("💎 Ver planos", "plans").row();
     if (L.bot.previewUrl) kb.url(L.bot.previewButton || "👀 Ver prévias grátis", L.bot.previewUrl).row();
+    kb.text("💬 Dúvidas? Fale com a gente", "sup").row();
     const text = L.bot.welcome.text || "Bem-vindo!";
     const media = L.bot.welcome.media;
     let src: string | InputFile | null | undefined = media?.fileId || media?.url;
@@ -504,28 +519,160 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
   async function myPlan(c: Context) {
     const L = await load();
     const { customer } = await who(c, L);
-    const rows = await ctx.db
-      .select({ a: s.accesses, ch: s.channels })
-      .from(s.accesses)
-      .innerJoin(s.channels, eq(s.channels.id, s.accesses.channelId))
-      .where(and(eq(s.accesses.customerId, customer.id), eq(s.accesses.status, "active")));
-    const now = ctx.now();
-    const active = rows.filter((r) => !r.a.expiresAt || r.a.expiresAt > now);
+    const active = await activeList(customer.id);
     if (!active.length) {
-      await show(c, "Você ainda não tem nenhuma assinatura ativa.", new InlineKeyboard().text("💎 Ver planos", "plans"));
+      await show(c, "Você ainda não tem nenhuma assinatura ativa.", new InlineKeyboard().text("💎 Ver planos", "plans").row().text("💬 Suporte", "sup"));
       return;
     }
-    const kb = new InlineKeyboard();
-    const lines = active.map((r) => `• <b>${esc(chName(r.ch))}</b> — ${r.a.expiresAt ? `até ${fmtDate(r.a.expiresAt, L.tz)}` : "vitalício"}`);
-    for (const r of active) if (r.ch.inviteLink) kb.url(`🔓 Entrar no ${chName(r.ch)}`, r.ch.inviteLink).row();
-    kb.text("🔄 Renovar", "plans");
-    await show(c, `📋 <b>Suas assinaturas:</b>\n${lines.join("\n")}`, kb);
+    await memberMenu(c, L, active);
   }
   bot.command("meuplano", (c) => myPlan(c));
   bot.callbackQuery("me", async (c) => {
     await c.answerCallbackQuery();
     await myPlan(c);
   });
+
+  // ───────────── Outros canais e pacotes ─────────────
+
+  /** Canais da conta que o cliente ainda não tem e que algum bot vende. */
+  async function otherChannels(L: Loaded, owned: string[]) {
+    const rows = await ctx.db
+      .select({ ch: s.channels, bot: s.bots.username })
+      .from(s.bots)
+      .innerJoin(s.channels, eq(s.channels.id, s.bots.mainChannelId))
+      .where(and(eq(s.bots.accountId, L.account.id), eq(s.bots.status, "active"), eq(s.channels.active, true)));
+    const seen = new Set<string>();
+    return rows.filter((r) => !owned.includes(r.ch.id) && !seen.has(r.ch.id) && seen.add(r.ch.id));
+  }
+  async function hasMore(L: Loaded, owned: string[]) {
+    return (await otherChannels(L, owned)).length > 0 || (L.bot.showBundles && (await activeBundles(L.account.id)).length > 0);
+  }
+
+  bot.callbackQuery("more", async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    const owned = (await activeList(customer.id)).map((r) => r.ch.id);
+    const others = await otherChannels(L, owned);
+    const kb = new InlineKeyboard();
+    for (const o of others) {
+      // Mesmo bot: vai direto aos planos; outro bot: abre o bot que vende o canal.
+      if (o.bot === L.bot.username) kb.text(`💎 ${chName(o.ch)}`, "plans").row();
+      else kb.url(`💎 ${chName(o.ch)}`, `https://t.me/${o.bot}?start=outros`).row();
+    }
+    if (L.bot.showBundles && (await activeBundles(L.account.id)).length) kb.text("🔥 Pacotes promocionais", "bundles").row();
+    kb.text("🏠 Início", "home");
+    await show(c, others.length ? "➕ <b>Outros canais que você ainda não tem:</b>" : "🔥 <b>Pacotes com vários canais:</b>", kb);
+  });
+
+  bot.callbackQuery("home", async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    await welcome(c, L, customer);
+  });
+
+  // ───────────── Suporte ─────────────
+
+  async function supportMenu(c: Context) {
+    const L = await load();
+    const { customer } = await who(c, L);
+    const open = await openTicketFor(ctx, customer.id, botId);
+    if (open) {
+      await show(c, "💬 Você já está em atendimento. É só escrever aqui que a gente responde.", new InlineKeyboard().text("✖️ Encerrar atendimento", "sup:end"));
+      return;
+    }
+    const isMember = (await activeList(customer.id)).length > 0;
+    const kb = new InlineKeyboard();
+    if (isMember) kb.text("🔓 Não consigo entrar no canal", "sup:join").row();
+    kb.text("💳 Paguei e não liberou", "sup:paid").row();
+    if (isMember) kb.text("🔄 Quero mudar de plano", "plans").row();
+    kb.text("👤 Falar com um atendente", "sup:human").row();
+    kb.text("🏠 Início", "home");
+    await show(c, "💬 <b>Como podemos ajudar?</b>", kb);
+  }
+  bot.command(["suporte", "ajuda"], (c) => supportMenu(c));
+  bot.callbackQuery("sup", async (c) => {
+    await c.answerCallbackQuery();
+    await supportMenu(c);
+  });
+
+  bot.callbackQuery("sup:join", async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    const active = await activeList(customer.id);
+    if (!active.length) return show(c, "Você não tem nenhum plano ativo no momento.", new InlineKeyboard().text("💎 Ver planos", "plans").row().text("👤 Falar com um atendente", "sup:human"));
+    const kb = new InlineKeyboard();
+    for (const r of active) if (r.ch.inviteLink) kb.url(`🔓 Entrar no ${chName(r.ch)}`, r.ch.inviteLink).row();
+    kb.text("👤 Ainda não consegui", "sup:human");
+    await show(c, "Toque no botão do canal e depois em <b>“Pedir para entrar”</b>. A aprovação é automática, em poucos segundos.\n\nSe você saiu do canal, pode usar o mesmo botão para voltar.", kb);
+  });
+
+  bot.callbackQuery("sup:paid", async (c) => {
+    await c.answerCallbackQuery({ text: "Conferindo seus pagamentos…" });
+    const L = await load();
+    const { customer } = await who(c, L);
+    const since = new Date(ctx.now().getTime() - 48 * 3600_000);
+    const pend = await ctx.db
+      .select({ id: s.charges.id })
+      .from(s.charges)
+      .innerJoin(s.orders, eq(s.orders.id, s.charges.orderId))
+      .where(and(eq(s.orders.customerId, customer.id), eq(s.charges.status, "pending"), gt(s.charges.createdAt, since)));
+    for (const p of pend) {
+      const r = await checkCharge(ctx, p.id).catch(() => null);
+      if (r && r !== "pending") {
+        await announcePaid(ctx, rt, r);
+        return;
+      }
+    }
+    await show(
+      c,
+      pend.length
+        ? "Ainda não recebemos a confirmação do seu Pix. Às vezes o banco demora alguns minutos.\n\nSe já pagou, fale com um atendente e envie o comprovante."
+        : "Não encontrei nenhum Pix seu em aberto. Se você pagou, fale com um atendente e envie o comprovante.",
+      new InlineKeyboard().text("👤 Falar com um atendente", "sup:human").row().text("🏠 Início", "home"),
+    );
+  });
+
+  bot.callbackQuery("sup:human", async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    const isMember = (await activeList(customer.id)).length > 0;
+    const { created } = await openTicket(ctx, { accountId: L.account.id, customerId: customer.id, botId, topic: isMember ? "assinante" : "antes de comprar" });
+    const open = isSupportOpen(L.account.settings, ctx.now());
+    await show(
+      c,
+      open
+        ? "✅ Pronto! Escreva sua dúvida aqui (pode mandar foto do comprovante, se for o caso). Um atendente já vai responder nesta conversa."
+        : offHoursText(L.account.settings),
+      new InlineKeyboard().text("✖️ Encerrar atendimento", "sup:end"),
+    );
+    if (created) await notifyTicket(L, customer);
+  });
+
+  bot.callbackQuery("sup:end", async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    const t = await openTicketFor(ctx, customer.id, botId);
+    if (t) await closeTicket(ctx, null, t, "customer");
+    await show(c, "Atendimento encerrado. Se precisar, é só tocar em 💬 Suporte.", new InlineKeyboard().text("🏠 Início", "home"));
+  });
+
+  /** Aviso de novo atendimento no canal de avisos da conta. */
+  async function notifyTicket(L: Loaded, customer: Customer) {
+    const chat = L.account.settings.notifyChatId;
+    if (!chat) return;
+    try {
+      const api = await rt.api(L.account.settings.notifyBotId || botId);
+      const who2 = customer.username ? `@${customer.username}` : `${customer.firstName ?? ""} (${customer.telegramUserId})`;
+      await api.sendMessage(chat, `💬 Novo pedido de atendimento\nCliente: ${esc(who2)}\nBot: @${esc(L.bot.username)}\nResponda em painel.botlybrasil.tech/atendimento`, { parse_mode: "HTML" });
+    } catch (err) {
+      ctx.log.warn({ botId, err: String(err) }, "falha ao avisar novo atendimento");
+    }
+  }
 
   // ───────────── Pedido de entrada no canal ─────────────
 
@@ -568,5 +715,33 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     } catch (err) {
       ctx.log.warn({ botId, chat: upd.chat.id, err: String(err) }, "falha ao cadastrar canal detectado");
     }
+  });
+
+  // ───────────── Mensagens livres do cliente ─────────────
+  // Com atendimento aberto, tudo o que o cliente escreve vai para o painel.
+  // Registrado por último: comandos e botões acima têm prioridade.
+  bot.on("message", async (c) => {
+    if (c.chat.type !== "private" || !c.from) return;
+    const L = await load();
+    const { customer } = await who(c, L);
+    const t = await openTicketFor(ctx, customer.id, botId);
+    const m = c.message;
+    if (!t) {
+      if (m.text && !m.text.startsWith("/"))
+        await c.reply("Para falar com a gente, toque em 💬 Suporte.", { reply_markup: new InlineKeyboard().text("💬 Suporte", "sup").text("🏠 Início", "home") });
+      return;
+    }
+    const media = m.photo
+      ? { mediaType: "photo" as const, tgFileId: m.photo.at(-1)!.file_id }
+      : m.document
+        ? { mediaType: "document" as const, tgFileId: m.document.file_id }
+        : m.video
+          ? { mediaType: "video" as const, tgFileId: m.video.file_id }
+          : m.voice
+            ? { mediaType: "voice" as const, tgFileId: m.voice.file_id }
+            : {};
+    const text = m.text ?? m.caption ?? null;
+    if (!text && !("tgFileId" in media)) return;
+    await addMessage(ctx, t, { sender: "customer", text, ...media });
   });
 }

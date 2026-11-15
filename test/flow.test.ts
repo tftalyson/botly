@@ -18,6 +18,7 @@ import { apiForToken } from "../src/bot/api.js";
 import { buildApi } from "../src/api/server.js";
 import { gatewayOrder } from "../src/payments/routing.js";
 import { removeFromChannel } from "../src/domain/removal.js";
+import { buildPanel } from "../src/panel/server.js";
 
 const URL = process.env.DATABASE_URL ?? "postgres://postgres:dev@127.0.0.1:5432/botly_test";
 const SECRET = "x".repeat(40);
@@ -226,6 +227,75 @@ describe("venda completa", () => {
     const vip = (await db.select().from(s.channels).where(eq(s.channels.telegramChatId, VIP)))[0]!;
     const acc = (await db.select().from(s.accesses).where(eq(s.accesses.channelId, vip.id)))[0]!;
     expect(acc.expiresAt!.toISOString()).toBe("2027-01-15T13:00:00.000Z");
+  });
+});
+
+describe("atendimento", () => {
+  const panel = () => buildPanel(ctx, { transformer: tg, webDir: "/nao-existe" });
+  let cookie = "";
+  const call = async (app: ReturnType<typeof buildPanel>, method: string, url: string, payload?: unknown) =>
+    app.inject({ method: method as any, url, payload: payload as any, headers: { cookie, ...(method !== "GET" ? { "x-botly": "1" } : {}) } });
+
+  it("assinante vê o menu com acessos, renovar e suporte", async () => {
+    await rt.handle(botId, msg("/start") as any);
+    const m = [...calls].reverse().find((c) => c.method === "sendMessage")!;
+    expect(m.payload.text).toContain("Seus acessos");
+    const btns = JSON.stringify(m.payload.reply_markup);
+    expect(btns).toContain("Renovar / mudar de plano");
+    expect(btns).toContain('"sup"');
+  });
+
+  it("pede atendente, escreve, e o painel responde com o nome escolhido", async () => {
+    await rt.handle(botId, cb("sup") as any);
+    expect(lastText()).toContain("Como podemos ajudar");
+    await rt.handle(botId, cb("sup:human") as any);
+    expect(lastText()).toContain("atendente já vai responder");
+    await rt.handle(botId, msg("não consigo entrar") as any);
+    await rt.handle(botId, { update_id: ++upd, message: { message_id: upd, date: 0, chat: { id: USER, type: "private" }, from: user, photo: [{ file_id: "F1", file_unique_id: "u", width: 1, height: 1 }], caption: "comprovante" } } as any);
+
+    const app = panel();
+    const r = await app.inject({ method: "POST", url: "/api/setup", payload: { name: "Talyson", email: "t@t.com", password: "senha-forte-1", accountName: "Teste" }, headers: { "x-botly": "1" } });
+    cookie = String(r.headers["set-cookie"]).split(";")[0]!;
+    expect((await call(app, "PUT", "/api/support-settings", { start: "10:00", end: "22:00", offMessage: "", supportName: "Suporte Top" })).statusCode).toBe(200);
+
+    const list = (await call(app, "GET", "/api/support")).json();
+    expect(list.counts.open).toBe(1);
+    const tk = list.tickets[0];
+    expect(tk.unread).toBe(2);
+    expect(tk.preview.text).toBe("comprovante");
+    const det = (await call(app, "GET", `/api/support/${tk.id}`)).json();
+    expect(det.messages.filter((m: any) => m.sender === "customer").length).toBe(2);
+    expect(det.messages.some((m: any) => m.mediaType === "photo")).toBe(true);
+    expect(det.accesses.length).toBeGreaterThan(0);
+
+    calls.length = 0;
+    expect((await call(app, "POST", `/api/support/${tk.id}/reply`, { text: "Oi, já te ajudo" })).statusCode).toBe(200);
+    const texts = sent("sendMessage").map((c) => c.payload.text);
+    expect(texts[0]).toContain("Suporte Top</b> entrou na conversa");
+    expect(texts[1]).toBe("<b>Suporte Top:</b> Oi, já te ajudo");
+    expect((await call(app, "GET", "/api/support?status=active")).json().tickets.length).toBe(1);
+
+    expect((await call(app, "POST", `/api/support/${tk.id}/send-links`)).statusCode).toBe(200);
+    expect(JSON.stringify(sent("sendMessage").at(-1)!.payload.reply_markup)).toContain("Entrar no");
+
+    expect((await call(app, "POST", `/api/support/${tk.id}/close`)).statusCode).toBe(200);
+    expect(lastText()).toContain("Atendimento encerrado");
+    // Depois de encerrado, mensagem solta não vai para o painel.
+    await rt.handle(botId, msg("obrigado") as any);
+    expect(lastText()).toContain("toque em 💬 Suporte");
+    const det2 = (await call(app, "GET", `/api/support/${tk.id}`)).json();
+    expect(det2.ticket.status).toBe("closed");
+    expect(det2.messages.filter((m: any) => m.sender === "customer").length).toBe(2);
+    await app.close();
+  });
+
+  it("fora do horário avisa o cliente", async () => {
+    const before = now;
+    now = new Date("2026-12-11T03:00:00Z"); // 00:00 em São Paulo
+    await rt.handle(botId, cb("sup:human") as any);
+    expect(lastText()).toContain("atendimento é das 10:00 às 22:00");
+    await rt.handle(botId, cb("sup:end") as any);
+    now = before;
   });
 });
 

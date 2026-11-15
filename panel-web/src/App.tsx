@@ -12,6 +12,7 @@ import { SettingsPage } from "./pages/settings";
 import { RetentionPage } from "./pages/retention";
 import { RemindersPage } from "./pages/reminders";
 import { ImportPage } from "./pages/import";
+import { SupportPage } from "./pages/support";
 
 function Wordmark() {
   return (
@@ -47,6 +48,13 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
   const loc = useLocation();
   useEffect(() => setOpen(false), [loc.pathname]);
+  const [waiting, setWaiting] = useState(0);
+  useEffect(() => {
+    const tick = () => get<{ waiting: number; unread: number }>("/api/support-count").then((r) => setWaiting(r.waiting)).catch(() => {});
+    tick();
+    const t = setInterval(tick, 20000);
+    return () => clearInterval(t);
+  }, []);
   return (
     <div className="shell">
       <div className="topbar">
@@ -60,6 +68,9 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
         <nav className="nav">
           <NavLink to="/" end>
             Início
+          </NavLink>
+          <NavLink to="/atendimento">
+            Atendimento {waiting > 0 && <b className="nav-count">{waiting}</b>}
           </NavLink>
           <NavLink to="/bots">Bots</NavLink>
           <NavLink to="/canais">Canais</NavLink>
@@ -102,6 +113,8 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             <Route path="/retencao" element={<RetentionPage />} />
             <Route path="/lembretes" element={<RemindersPage />} />
             <Route path="/importar" element={<ImportPage />} />
+            <Route path="/atendimento" element={<SupportPage />} />
+            <Route path="/atendimento/:id" element={<SupportPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
