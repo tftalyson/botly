@@ -6,8 +6,9 @@
 //   bump:y|n:<pedidoId>    aceitou/recusou o extra antes do Pix
 //   chk:<cobrancaId>       "Já paguei"
 //   new:<pedidoId>         "Gerar outro Pix" (outro gateway primeiro)
-import { and, asc, eq, inArray, desc } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, desc } from "drizzle-orm";
 import { InlineKeyboard, InputFile, type Bot, type Context } from "grammy";
+import QRCode from "qrcode";
 import * as s from "../db/schema.js";
 import type { Ctx } from "../domain/context.js";
 import { activeAccess, touchCustomer, type Customer } from "../domain/customers.js";
@@ -33,6 +34,21 @@ interface Loaded {
   main: Channel | null;
   plans: Plan[];
   tz: string;
+}
+
+/** Clientes com um Pix sendo gerado agora (bot:usuário → até quando). */
+const buying = new Map<string, number>();
+
+/** Pedido igual, pendente e recente: reaproveita em vez de criar outro (e outro Pix). */
+async function reusableOrder(ctx: Ctx, customerId: string, botId: string, match: (o: typeof s.orders.$inferSelect) => boolean) {
+  const since = new Date(ctx.now().getTime() - PIX_VALID_MINUTES * 60_000);
+  const rows = await ctx.db
+    .select()
+    .from(s.orders)
+    .where(and(eq(s.orders.customerId, customerId), eq(s.orders.botId, botId), eq(s.orders.status, "pending"), gt(s.orders.createdAt, since)))
+    .orderBy(desc(s.orders.createdAt))
+    .limit(5);
+  return rows.find(match);
 }
 
 export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRuntime) {
@@ -68,6 +84,26 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     }
     await c.reply(text, o);
   }
+
+  // ───────────── Trava de compra ─────────────
+  // Enquanto o Pix de um cliente está sendo gerado, outros toques em botões de compra
+  // não geram outro Pix: o cliente recebe "aguarde" (evita 3 cliques = 3 Pix).
+  const BUY = /^(p|bun|bump|rn|rnx|wb|new):/;
+  bot.on("callback_query:data", async (c, next) => {
+    if (!BUY.test(c.callbackQuery.data)) return next();
+    const key = `${botId}:${c.from.id}`;
+    const until = buying.get(key) ?? 0;
+    if (until > Date.now()) {
+      await c.answerCallbackQuery({ text: "⏳ Estou gerando seu Pix, aguarde alguns segundos…" }).catch(() => {});
+      return;
+    }
+    buying.set(key, Date.now() + 60_000);
+    try {
+      await next();
+    } finally {
+      buying.delete(key);
+    }
+  });
 
   // ───────────── Entrada ─────────────
 
@@ -209,6 +245,12 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const { customer } = await who(c, L);
     await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "chose_plan", meta: { planId: plan.id } });
     await advanceFunnel(ctx, customer.id, "chose_plan");
+    // Já escolheu este plano há pouco e não pagou: reaproveita o mesmo pedido (e o mesmo Pix).
+    const again = await reusableOrder(ctx, customer.id, botId, (o) => o.items[0]?.type === "plan" && o.items[0].refId === plan.id && o.discountCents === 0 && (o.source ?? "") !== "volte");
+    if (again) {
+      const hasPix = (await ctx.db.select({ id: s.charges.id }).from(s.charges).where(and(eq(s.charges.orderId, again.id), eq(s.charges.status, "pending")))).length > 0;
+      if (hasPix || again.items.length > 1) return pay(c, L, again.id, { fromMenu: true });
+    }
     const renewing = !!(await activeAccess(ctx, customer.id, L.main.id));
     const item: OrderItem = {
       type: "plan",
@@ -219,7 +261,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       durationValue: plan.durationValue,
       priceCents: plan.priceCents,
     };
-    const order = await createOrder(ctx, { accountId: L.account.id, botId, customerId: customer.id, kind: renewing ? "renewal" : "new", items: [item], source: customer.source });
+    const order = again ?? (await createOrder(ctx, { accountId: L.account.id, botId, customerId: customer.id, kind: renewing ? "renewal" : "new", items: [item], source: customer.source }));
     const bump = await pickOrderBump(ctx, L.bot, customer.id, L.account.settings.offerCooldownDays ?? 30);
     if (bump) {
       await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "bump_offered", meta: { channelId: bump.channel.id, orderId: order.id } });
@@ -275,7 +317,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const { customer } = await who(c, L);
     await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "chose_plan", meta: { bundleId: b.id } });
     await advanceFunnel(ctx, customer.id, "chose_plan");
-    const order = await createOrder(ctx, {
+    const order = (await reusableOrder(ctx, customer.id, botId, (o) => o.kind === "bundle" && o.items[0]?.refId === b.id)) ?? await createOrder(ctx, {
       accountId: L.account.id,
       botId,
       customerId: customer.id,
@@ -293,45 +335,79 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
   async function pay(c: Context, L: Loaded, orderId: string, opts: { avoidGatewayId?: string | null; fromMenu?: boolean } = {}) {
     const avoidGatewayId = opts.avoidGatewayId;
     const order = (await ctx.db.select().from(s.orders).where(eq(s.orders.id, orderId)))[0]!;
-    let res;
-    try {
-      res = await createPixForOrder(ctx, orderId, { avoidGatewayId });
-    } catch (err) {
-      ctx.log.error({ botId, orderId, err: String(err) }, "falha ao gerar Pix");
-      await show(
-        c,
-        err instanceof NoGatewayError && !String(err.message).includes("|")
-          ? "Pagamento indisponível no momento. Tente de novo em alguns minutos 🙏"
-          : "Não consegui gerar o Pix agora. Tente de novo em instantes 🙏",
-        new InlineKeyboard().text("🔁 Tentar de novo", `new:${orderId}`),
-      );
-      return;
+    // Aviso imediato enquanto o Pix é gerado (no lugar do menu, ou mensagem nova).
+    let waitMsg: number | null = null;
+    const waitText = "⏳ Gerando seu Pix, só um instante…";
+    if (opts.fromMenu && c.callbackQuery?.message) {
+      const ok = await c.editMessageText(waitText).then(() => true, () => false);
+      waitMsg = ok ? c.callbackQuery.message.message_id : null;
     }
-    await logEvent(ctx, { accountId: L.account.id, botId, customerId: order.customerId, type: "pix_generated", meta: { orderId, chargeId: res.charge.id, totalCents: order.totalCents, provider: res.charge.provider } });
-    await advanceFunnel(ctx, order.customerId, "pix_generated");
-    const names = order.items.map((i) => i.name).join(" + ");
+    if (waitMsg == null) waitMsg = (await c.reply(waitText).catch(() => null))?.message_id ?? null;
+    const dropWait = () => (waitMsg != null ? c.api.deleteMessage(c.chat!.id, waitMsg).catch(() => {}) : undefined);
+
+    // Pix ainda válido deste pedido: manda o mesmo de novo (não gera outro), menos em "Gerar outro Pix".
+    const since = new Date(ctx.now().getTime() - (PIX_VALID_MINUTES - 2) * 60_000);
+    const existing = avoidGatewayId
+      ? undefined
+      : (
+          await ctx.db
+            .select()
+            .from(s.charges)
+            .where(and(eq(s.charges.orderId, orderId), eq(s.charges.status, "pending"), gt(s.charges.createdAt, since)))
+            .orderBy(desc(s.charges.createdAt))
+            .limit(1)
+        )[0];
+    let charge: typeof s.charges.$inferSelect;
+    let code: string;
+    if (existing?.pixCode) {
+      charge = existing;
+      code = existing.pixCode;
+    } else {
+      try {
+        const res = await createPixForOrder(ctx, orderId, { avoidGatewayId });
+        charge = res.charge;
+        code = res.pix.code;
+      } catch (err) {
+        ctx.log.error({ botId, orderId, err: String(err) }, "falha ao gerar Pix");
+        await dropWait();
+        await show(
+          c,
+          err instanceof NoGatewayError && !String(err.message).includes("|")
+            ? "Pagamento indisponível no momento. Tente de novo em alguns minutos 🙏"
+            : "Não consegui gerar o Pix agora. Tente de novo em instantes 🙏",
+          new InlineKeyboard().text("🔁 Tentar de novo", `new:${orderId}`),
+        );
+        return;
+      }
+      await logEvent(ctx, { accountId: L.account.id, botId, customerId: order.customerId, type: "pix_generated", meta: { orderId, chargeId: charge.id, totalCents: order.totalCents, provider: charge.provider } });
+      await advanceFunnel(ctx, order.customerId, "pix_generated");
+    }
+    const fresh = (await ctx.db.select().from(s.orders).where(eq(s.orders.id, orderId)))[0]!;
+    const names = fresh.items.map((i) => i.name).join(" + ");
+    const minutesLeft = Math.max(1, Math.round(((charge.expiresAt?.getTime() ?? ctx.now().getTime() + PIX_VALID_MINUTES * 60_000) - ctx.now().getTime()) / 60_000));
     const caption =
       `🧾 <b>Resumo:</b> ${esc(names)}\n` +
-      (order.discountCents ? `🏷 Desconto: −${brl(order.discountCents)}\n` : "") +
-      `💰 <b>Total: ${brl(order.totalCents)}</b>\n\n` +
-      `Copie o código Pix abaixo e pague no app do seu banco.\n⏳ O Pix vale por ${PIX_VALID_MINUTES} minutos. A liberação é automática.`;
-    if (opts.fromMenu && c.callbackQuery?.message) await c.deleteMessage().catch(() => {});
-    await deletePixMessages(c, orderId, res.charge.id);
+      (fresh.discountCents ? `🏷 Desconto: −${brl(fresh.discountCents)}\n` : "") +
+      `💰 <b>Total: ${brl(fresh.totalCents)}</b>\n\n` +
+      `Copie o código Pix abaixo e pague no app do seu banco.\n⏳ O Pix vale por ${minutesLeft} minutos. A liberação é automática.`;
+    // Some o Pix antigo deste pedido (inclusive o mesmo, que vai ser reenviado).
+    await deletePixMessages(c, orderId, null);
+    await dropWait();
     const ids: number[] = [];
-    const first = res.pix.qrBase64
-      ? await c.replyWithPhoto(new InputFile(Buffer.from(res.pix.qrBase64, "base64"), "pix.png"), { caption, parse_mode: "HTML" })
-      : await c.reply(caption, { parse_mode: "HTML" });
+    const qr = await QRCode.toBuffer(code, { width: 480, margin: 2 }).catch(() => null);
+    const first = qr ? await c.replyWithPhoto(new InputFile(qr, "pix.png"), { caption, parse_mode: "HTML" }) : await c.reply(caption, { parse_mode: "HTML" });
     ids.push(first.message_id);
-    const code = await c.reply(`<code>${esc(res.pix.code)}</code>`, {
+    const codeMsg = await c.reply(`<code>${esc(code)}</code>`, {
       parse_mode: "HTML",
-      reply_markup: new InlineKeyboard().text("✅ Já paguei", `chk:${res.charge.id}`).row().text("🔁 Gerar outro Pix", `new:${orderId}`),
+      // "Gerar outro Pix" só faz sentido com mais de uma forma de pagamento (tenta outro banco).
+      reply_markup: L.bot.routing.gatewayIds.length > 1 ? new InlineKeyboard().text("✅ Já paguei", `chk:${charge.id}`).row().text("🔁 Gerar Pix em outro banco", `new:${orderId}`) : new InlineKeyboard().text("✅ Já paguei", `chk:${charge.id}`),
     });
-    ids.push(code.message_id);
-    await ctx.db.update(s.charges).set({ chatMessageIds: ids }).where(eq(s.charges.id, res.charge.id));
+    ids.push(codeMsg.message_id);
+    await ctx.db.update(s.charges).set({ chatMessageIds: ids }).where(eq(s.charges.id, charge.id));
   }
 
   /** Apaga as mensagens de Pix anteriores deste pedido (menos a cobrança atual). */
-  async function deletePixMessages(c: Context, orderId: string, keepChargeId: string) {
+  async function deletePixMessages(c: Context, orderId: string, keepChargeId: string | null) {
     const olds = await ctx.db.select({ id: s.charges.id, ids: s.charges.chatMessageIds }).from(s.charges).where(eq(s.charges.orderId, orderId));
     for (const o of olds) {
       if (o.id === keepChargeId || !o.ids.length) continue;
@@ -367,7 +443,8 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const order = (await ctx.db.select().from(s.orders).where(and(eq(s.orders.id, c.match[1]!), eq(s.orders.customerId, customer.id))))[0];
     if (!order || order.status !== "pending") return;
     const last = (await ctx.db.select().from(s.charges).where(eq(s.charges.orderId, order.id)).orderBy(desc(s.charges.createdAt)).limit(1))[0];
-    await pay(c, L, order.id, { avoidGatewayId: last?.gatewayId });
+    // Com uma forma de pagamento só, reenvia o mesmo Pix (se ainda valer) em vez de gerar outro.
+    await pay(c, L, order.id, { avoidGatewayId: L.bot.routing.gatewayIds.length > 1 ? last?.gatewayId : null });
   });
 
   // ───────────── Renovação pelos botões do lembrete ─────────────
@@ -394,7 +471,10 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     }
     const subtotal = items.reduce((x, i) => x + i.priceCents, 0);
     const discountCents = opts.discountPct ? Math.round((plan.priceCents * opts.discountPct) / 100) : 0;
-    const order = await createOrder(ctx, { accountId: L.account.id, botId, customerId: customer.id, kind: "renewal", items, discountCents, source: opts.source ?? "lembrete" });
+    const sig = JSON.stringify(items.map((i) => [i.type, i.refId, i.channelIds]));
+    const order =
+      (await reusableOrder(ctx, customer.id, botId, (o) => o.kind === "renewal" && o.discountCents === discountCents && JSON.stringify(o.items.map((i) => [i.type, i.refId, i.channelIds])) === sig)) ??
+      (await createOrder(ctx, { accountId: L.account.id, botId, customerId: customer.id, kind: "renewal", items, discountCents, source: opts.source ?? "lembrete" }));
     await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "renew_clicked", meta: { accessId, withExtra: items.length > 1, discountPct: opts.discountPct ?? 0, subtotal } });
     await pay(c, L, order.id);
   }

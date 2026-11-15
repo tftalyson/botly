@@ -152,6 +152,12 @@ describe("venda completa", () => {
     expect(lastText()).toContain("PIXCODE");
     const c = (await db.select().from(s.customers))[0]!;
     expect(c.funnelStage).toBe("pix_generated");
+    // Escolher o mesmo plano de novo (ou "gerar outro" com um banco só) reenvia o MESMO Pix.
+    await rt.handle(botId, cb(`p:${planId}`) as any);
+    await rt.handle(botId, cb(`new:${order.id}`) as any);
+    expect((await db.select().from(s.charges)).length).toBe(1);
+    expect((await db.select().from(s.orders)).length).toBe(1);
+    expect(lastText()).toContain("PIXCODE");
   });
 
   it("aviso da PushinPay libera os dois canais, uma vez só", async () => {
@@ -191,6 +197,19 @@ describe("venda completa", () => {
     await rt.handle(botId, join({ id: 999, is_bot: false, first_name: "X" }) as any);
     expect(sent("declineChatJoinRequest").length).toBe(1);
     expect(lastText()).toContain("plano ativo");
+  });
+
+  it("três toques seguidos no plano geram um Pix só", async () => {
+    const u2 = { id: 888, is_bot: false, first_name: "Ana" };
+    const cb2 = (data: string) => ({ update_id: ++upd, callback_query: { id: String(upd), from: u2, chat_instance: "y", data, message: { message_id: 1, date: 0, chat: { id: 888, type: "private" }, text: "planos" } } });
+    // Sem extra para simplificar.
+    await db.update(s.bots).set({ upsell: {} }).where(eq(s.bots.id, botId));
+    await Promise.all([rt.handle(botId, cb2(`p:${planId}`) as any), rt.handle(botId, cb2(`p:${planId}`) as any), rt.handle(botId, cb2(`p:${planId}`) as any)]);
+    const cust = (await db.select().from(s.customers).where(eq(s.customers.telegramUserId, 888)))[0]!;
+    const orders = await db.select().from(s.orders).where(eq(s.orders.customerId, cust.id));
+    expect(orders.length).toBe(1);
+    expect((await db.select().from(s.charges).where(eq(s.charges.orderId, orders[0]!.id))).length).toBe(1);
+    expect(sent("answerCallbackQuery").some((c) => /aguarde/i.test(c.payload.text ?? ""))).toBe(true);
   });
 
   it("renovar soma ao vencimento e não oferece extra que já tem", async () => {
