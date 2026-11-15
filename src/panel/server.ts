@@ -14,7 +14,7 @@ import { apiForToken } from "../bot/api.js";
 import { botToken } from "../bot/runtime.js";
 import type { Transformer } from "grammy";
 import { gatewayClient } from "../payments/gateway.js";
-import { dashboard, type RangeKey } from "./dashboard.js";
+import { dashboard, funnelPeople, FUNNEL_STEPS, type FunnelStep, type RangeKey } from "./dashboard.js";
 import { analyze, applyImport, readSheet, suggestPlans } from "../domain/importer.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { agentReply, assume, closeTicket, isSupportOpen, supportHours } from "../domain/support.js";
@@ -231,6 +231,21 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
       bf = want.filter((x) => mine.includes(x));
     }
     return dashboard(db, a.id, ctx.now(), a.settings.timezone ?? DEFAULT_TZ, key, { from: req.query.from, to: req.query.to }, bf);
+  });
+
+  // Quem passou por uma etapa do funil (mesmos filtros do Início).
+  app.get<{ Querystring: { range?: string; from?: string; to?: string; bots?: string; step?: string } }>("/api/dashboard/people", async (req) => {
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
+    const keys: RangeKey[] = ["today", "yesterday", "7d", "week", "month", "30d", "all", "custom"];
+    const key = (keys as string[]).includes(req.query.range ?? "") ? (req.query.range as RangeKey) : "7d";
+    const step = (FUNNEL_STEPS as readonly string[]).includes(req.query.step ?? "") ? (req.query.step as FunnelStep) : "started";
+    let bf: string[] | null = null;
+    if (req.query.bots) {
+      const want = req.query.bots.split(",").map((x) => x.trim()).filter(Boolean);
+      const mine = (await db.select({ id: s.bots.id }).from(s.bots).where(eq(s.bots.accountId, a.id))).map((b) => b.id);
+      bf = want.filter((x) => mine.includes(x));
+    }
+    return funnelPeople(db, a.id, ctx.now(), a.settings.timezone ?? DEFAULT_TZ, key, { from: req.query.from, to: req.query.to }, bf, step);
   });
 
   // ─── Bots ───

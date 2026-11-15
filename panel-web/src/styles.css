@@ -423,3 +423,33 @@ input[type="date"] { width: 100%; border: 1px solid var(--line); border-radius: 
 .bot-pop .only { border: 0; background: none; color: var(--brand); font: 600 12px var(--text); cursor: pointer; padding: 2px 4px; opacity: 0; }
 .bot-pop .check:hover .only, .bot-pop .only:focus-visible { opacity: 1; }
 @media (hover: none) { .bot-pop .only { opacity: 1; } }
+
+/* Funil clicável e lista de pessoas */
+button.frow { width: calc(100% + 16px); border: 0; background: none; font: inherit; color: inherit; text-align: left; padding: 6px 8px; margin: -6px -8px; border-radius: 10px; cursor: pointer; box-sizing: border-box; }
+button.frow:hover:not(:disabled) { background: var(--mist); }
+button.frow:disabled { cursor: default; }
+.modal.wide { width: min(1080px, 100%); }
+.fp-tabs { margin: 12px 0 10px; }
+.fp-tabs small { color: var(--muted); font-weight: 600; margin-left: 4px; }
+.check-line { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; margin-bottom: 12px; cursor: pointer; }
+.check-line input { accent-color: var(--brand); width: 16px; height: 16px; }
+table.people td { vertical-align: top; font-size: 14px; }
+table.people td strong, table.people td small, table.people td > span > small { display: block; }
+table.people .money { color: var(--money); font-weight: 600; }
+table.people .pend { color: var(--warn); font-weight: 600; }
+table.people .nowrap { white-space: nowrap; }
+.modal { position: relative; }
+.modal-x { position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--mist); color: var(--ink-2); font-size: 22px; line-height: 1; cursor: pointer; }
+.modal-x:hover { background: var(--line); color: var(--ink); }
+.modal h2 { padding-right: 40px; }
+@media (max-width: 700px) {
+  table.people thead { display: none; }
+  table.people, table.people tbody, table.people tr, table.people td { display: block; }
+  table.people tr { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px 12px; margin-bottom: 10px; }
+  table.people td { border: 0 !important; padding: 3px 0 !important; display: grid; grid-template-columns: 96px 1fr; gap: 8px; }
+  table.people td::before { content: attr(data-label); color: var(--muted); font-size: 12px; padding-top: 2px; }
+  table.people td.who { display: block; font-size: 15px; padding-bottom: 6px !important; }
+  table.people td.who::before { content: none; }
+  table.people td.who strong, table.people td.who small { display: inline; margin-right: 6px; }
+  .fp-tabs { margin-right: -24px; }
+}

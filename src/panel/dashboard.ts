@@ -281,3 +281,88 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
     },
   };
 }
+
+// ─── Pessoas do funil ───
+
+export const FUNNEL_STEPS = ["started", "viewed_plans", "chose_plan", "pix_generated", "paid"] as const;
+export type FunnelStep = (typeof FUNNEL_STEPS)[number];
+
+/** Quem passou por uma etapa do funil no período, com plano escolhido, Pix e se pagou. */
+export async function funnelPeople(db: Db, accountId: string, now: Date, tz: string, key: RangeKey, custom: { from?: string; to?: string } | undefined, bf: BotFilter, step: FunnelStep) {
+  const { from, to } = rangeBounds(key, now, tz, custom);
+  const evs = await db
+    .select({ customerId: s.events.customerId, botId: s.events.botId, type: s.events.type, meta: s.events.meta, at: s.events.createdAt })
+    .from(s.events)
+    .where(and(eq(s.events.accountId, accountId), fEvents(bf), inArray(s.events.type, ["started", "viewed_plans", "chose_plan", "pix_generated"]), gte(s.events.createdAt, from), lt(s.events.createdAt, to)))
+    .orderBy(s.events.createdAt);
+  const paidOrders = await db
+    .select({ id: s.orders.id, customerId: s.orders.customerId, botId: s.orders.botId, items: s.orders.items, total: s.orders.totalCents, at: s.orders.paidAt })
+    .from(s.orders)
+    .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), inArray(s.orders.kind, ["new", "bundle", "recovery"]), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)));
+
+  type P = { customerId: string; botId: string | null; steps: Set<string>; first: Date; last: Date; planId?: string; bundleId?: string; pixOrderIds: string[]; paid?: (typeof paidOrders)[number] };
+  const people = new Map<string, P>();
+  const get = (c: string, at: Date, botId: string | null) => {
+    let p = people.get(c);
+    if (!p) people.set(c, (p = { customerId: c, botId, steps: new Set(), first: at, last: at, pixOrderIds: [] }));
+    if (at > p.last) p.last = at;
+    if (botId) p.botId = botId;
+    return p;
+  };
+  for (const e of evs) {
+    if (!e.customerId) continue;
+    const p = get(e.customerId, e.at, e.botId);
+    p.steps.add(e.type);
+    if (e.type === "chose_plan") {
+      p.planId = (e.meta.planId as string) ?? undefined;
+      p.bundleId = (e.meta.bundleId as string) ?? undefined;
+    }
+    if (e.type === "pix_generated" && typeof e.meta.orderId === "string") p.pixOrderIds.push(e.meta.orderId);
+  }
+  for (const o of paidOrders) {
+    const p = get(o.customerId, o.at!, o.botId);
+    p.steps.add("paid");
+    p.paid = o;
+  }
+  const list = [...people.values()].filter((p) => p.steps.has(step)).sort((a, b) => b.last.getTime() - a.last.getTime());
+  const total = list.length;
+  const shown = list.slice(0, 500);
+
+  // Nomes: clientes, bots, planos, pacotes e pedidos do Pix.
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const ids = (xs: (string | undefined | null)[]) => [...new Set(xs.filter((x): x is string => !!x && UUID.test(x)))];
+  const custIds = ids(shown.map((p) => p.customerId));
+  const customers = custIds.length ? await db.select().from(s.customers).where(inArray(s.customers.id, custIds)) : [];
+  const bots = await db.select({ id: s.bots.id, username: s.bots.username }).from(s.bots).where(eq(s.bots.accountId, accountId));
+  const planIds = ids(shown.map((p) => p.planId));
+  const plans = planIds.length ? await db.select({ id: s.plans.id, name: s.plans.name, price: s.plans.priceCents }).from(s.plans).where(inArray(s.plans.id, planIds)) : [];
+  const bundleIds = ids(shown.map((p) => p.bundleId));
+  const bundles = bundleIds.length ? await db.select({ id: s.bundles.id, name: s.bundles.name, price: s.bundles.priceCents }).from(s.bundles).where(inArray(s.bundles.id, bundleIds)) : [];
+  const orderIds = ids(shown.map((p) => p.pixOrderIds.at(-1)));
+  const orders = orderIds.length ? await db.select({ id: s.orders.id, items: s.orders.items, total: s.orders.totalCents, status: s.orders.status, at: s.orders.createdAt }).from(s.orders).where(inArray(s.orders.id, orderIds)) : [];
+
+  const rank = (p: P) => (p.steps.has("paid") ? 4 : p.steps.has("pix_generated") ? 3 : p.steps.has("chose_plan") ? 2 : p.steps.has("viewed_plans") ? 1 : 0);
+  return {
+    step,
+    total,
+    people: shown.map((p) => {
+      const c = customers.find((x) => x.id === p.customerId);
+      const pl = plans.find((x) => x.id === p.planId);
+      const bu = bundles.find((x) => x.id === p.bundleId);
+      const o = orders.find((x) => x.id === p.pixOrderIds.at(-1));
+      return {
+        customerId: p.customerId,
+        name: c ? [c.firstName, c.lastName].filter(Boolean).join(" ") || null : null,
+        username: c?.username ?? null,
+        telegramUserId: c?.telegramUserId ?? null,
+        bot: bots.find((b) => b.id === p.botId)?.username ?? null,
+        first: p.first,
+        last: p.last,
+        reached: FUNNEL_STEPS[rank(p)],
+        chosen: pl ? { name: pl.name, cents: pl.price } : bu ? { name: `📦 ${bu.name}`, cents: bu.price } : null,
+        pix: o ? { items: o.items.map((i) => i.name), cents: o.total, status: o.status, at: o.at, count: p.pixOrderIds.length } : null,
+        paid: p.paid ? { items: p.paid.items.map((i) => i.name), cents: p.paid.total, at: p.paid.at } : null,
+      };
+    }),
+  };
+}

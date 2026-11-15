@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { brl, get, type BotListItem, type Me } from "../api";
-import { Loading, useLoad } from "../ui";
+import { Loading, Modal, useLoad } from "../ui";
 
 type RangeKey = "today" | "yesterday" | "7d" | "week" | "month" | "30d" | "all" | "custom";
 interface Numbers {
@@ -149,7 +149,7 @@ export function HomePage({ me }: { me: Me }) {
       {!d.data ? (
         <Loading error={d.error} />
       ) : (
-        <Body d={d.data} prevLabel={PREV_LABEL[range]} />
+        <Body d={d.data} prevLabel={PREV_LABEL[range]} q={q} />
       )}
     </>
   );
@@ -206,7 +206,8 @@ function Delta({ cur, prev, kind, label }: { cur: number | null; prev: number | 
   );
 }
 
-function Body({ d, prevLabel }: { d: Dash; prevLabel: string }) {
+function Body({ d, prevLabel, q }: { d: Dash; prevLabel: string; q: string }) {
+  const [people, setPeople] = useState<number | null>(null);
   const c = d.current;
   const p = d.previous;
   return (
@@ -237,9 +238,10 @@ function Body({ d, prevLabel }: { d: Dash; prevLabel: string }) {
         <div className="panel">
           <h2>Funil de vendas</h2>
           <p className="small muted" style={{ margin: "4px 0 16px" }}>
-            Pessoas únicas em cada etapa, no período. A porcentagem é de quem passou da etapa anterior.
+            Pessoas únicas em cada etapa, no período. A porcentagem é de quem passou da etapa anterior. Toque numa etapa para ver quem são.
           </p>
-          <Funnel steps={d.funnel} />
+          <Funnel steps={d.funnel} onPick={setPeople} />
+          {people !== null && <FunnelPeople q={q} initial={people} counts={d.funnel.map((f) => f.n)} onClose={() => setPeople(null)} />}
           <div className="mini-stats">
             <div>
               <span className="muted small">Pix gerados que foram pagos</span>
@@ -400,21 +402,21 @@ function Kpi({ label, value, sub, delta }: { label: string; value: string; sub: 
   );
 }
 
-function Funnel({ steps }: { steps: { step: string; n: number }[] }) {
+function Funnel({ steps, onPick }: { steps: { step: string; n: number }[]; onPick: (i: number) => void }) {
   const max = Math.max(1, ...steps.map((s) => s.n));
   return (
     <div className="funnel">
       {steps.map((s, i) => {
         const prev = i ? steps[i - 1]!.n : null;
         return (
-          <div className="frow" key={s.step}>
+          <button type="button" className="frow" key={s.step} onClick={() => onPick(i)} disabled={!s.n} title={s.n ? "Ver quem são" : undefined}>
             <span className="fl">{s.step}</span>
             <div className="ftrack">
               <div className="fbar" style={{ width: `${(s.n / max) * 100}%` }} />
             </div>
             <span className="fn">{s.n}</span>
             <span className="fp">{prev ? pctTxt(s.n / prev) : prev === 0 ? "—" : ""}</span>
-          </div>
+          </button>
         );
       })}
     </div>
@@ -630,5 +632,106 @@ function BotPicker({ bots, value, onChange }: { bots: BotListItem[]; value: stri
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Quem são as pessoas de cada etapa do funil ───
+
+const STEP_KEYS = ["started", "viewed_plans", "chose_plan", "pix_generated", "paid"] as const;
+type StepKey = (typeof STEP_KEYS)[number];
+const STEP_TAB: Record<StepKey, string> = { started: "Iniciaram", viewed_plans: "Viram planos", chose_plan: "Escolheram", pix_generated: "Geraram Pix", paid: "Pagaram" };
+const STEP_STOP: Record<StepKey, string> = { started: "Só deu /start", viewed_plans: "Viu os planos", chose_plan: "Escolheu, não gerou Pix", pix_generated: "Gerou Pix, não pagou", paid: "Pagou" };
+interface Person {
+  customerId: string;
+  name: string | null;
+  username: string | null;
+  telegramUserId: number | null;
+  bot: string | null;
+  first: string;
+  last: string;
+  reached: StepKey;
+  chosen: { name: string; cents: number } | null;
+  pix: { items: string[]; cents: number; status: string; at: string; count: number } | null;
+  paid: { items: string[]; cents: number; at: string } | null;
+}
+const at = (iso: string) => new Date(iso).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+function FunnelPeople({ q, initial, counts, onClose }: { q: string; initial: number; counts: number[]; onClose: () => void }) {
+  const [step, setStep] = useState<StepKey>(STEP_KEYS[initial] ?? "started");
+  const [onlyStopped, setOnlyStopped] = useState(false);
+  const r = useLoad(() => get<{ total: number; people: Person[] }>(`/api/dashboard/people?${q}&step=${step}`), [q, step]);
+  const list = (r.data?.people ?? []).filter((p) => !onlyStopped || p.reached === step);
+  const tabs = useRef<HTMLDivElement>(null);
+  useEffect(() => tabs.current?.querySelector(".on")?.scrollIntoView({ inline: "center", block: "nearest" }), [step]);
+  return (
+    <Modal title="Quem passou pelo funil" onClose={onClose} wide>
+      <div className="tabs fp-tabs" ref={tabs}>
+        {STEP_KEYS.map((k, i) => (
+          <button key={k} className={step === k ? "on" : ""} onClick={() => setStep(k)}>
+            {STEP_TAB[k]} <small>{counts[i] ?? 0}</small>
+          </button>
+        ))}
+      </div>
+      {step !== "paid" && (
+        <label className="check-line">
+          <input type="checkbox" checked={onlyStopped} onChange={(e) => setOnlyStopped(e.target.checked)} /> Só quem parou nesta etapa
+        </label>
+      )}
+      {!r.data ? (
+        <Loading error={r.error} />
+      ) : list.length === 0 ? (
+        <p className="muted">Ninguém aqui no período.</p>
+      ) : (
+        <div className="scroll-x">
+          <table className="rank people">
+            <thead>
+              <tr>
+                <th>Pessoa</th>
+                <th>Bot</th>
+                <th>Plano escolhido</th>
+                <th>Pix</th>
+                <th>Chegou até</th>
+                <th>Última ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((p) => (
+                <tr key={p.customerId}>
+                  <td className="who">
+                    <strong>{p.name || (p.username ? `@${p.username}` : `ID ${p.telegramUserId}`)}</strong>
+                    {p.name && p.username && <small className="muted">@{p.username}</small>}
+                  </td>
+                  <td data-label="Bot" className="muted">@{p.bot ?? "?"}</td>
+                  <td data-label="Plano escolhido">{p.chosen ? `${p.chosen.name} · ${brl(p.chosen.cents)}` : <span className="muted">—</span>}</td>
+                  <td data-label="Pix">
+                    {p.paid ? (
+                      <span className="money">
+                        {brl(p.paid.cents)} pago
+                        <small className="muted">{p.paid.items.join(" + ")}</small>
+                      </span>
+                    ) : p.pix ? (
+                      <span>
+                        {brl(p.pix.cents)} {p.pix.status === "paid" ? <span className="money">pago</span> : <span className="pend">em aberto</span>}
+                        <small className="muted">
+                          {p.pix.items.join(" + ")}
+                          {p.pix.count > 1 ? ` · ${p.pix.count} Pix gerados` : ""}
+                        </small>
+                      </span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td data-label="Chegou até">
+                    <span className={`chip ${p.reached === "paid" ? "ok" : p.reached === "pix_generated" ? "warn" : "plain"}`}>{STEP_STOP[p.reached]}</span>
+                  </td>
+                  <td data-label="Última ação" className="muted nowrap">{at(p.last)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {r.data.total > r.data.people.length && <p className="small muted">Mostrando as {r.data.people.length} mais recentes de {r.data.total}.</p>}
+        </div>
+      )}
+    </Modal>
   );
 }

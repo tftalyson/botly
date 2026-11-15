@@ -5,7 +5,7 @@ import { createDb } from "../src/db/client.js";
 import { runMigrations } from "../src/db/migrate.js";
 import * as s from "../src/db/schema.js";
 import { encryptJson } from "../src/lib/crypto.js";
-import { dashboard, rangeBounds } from "../src/panel/dashboard.js";
+import { dashboard, funnelPeople, rangeBounds } from "../src/panel/dashboard.js";
 import type { OrderItem } from "../src/domain/types.js";
 
 const URL = process.env.DATABASE_URL ?? "postgres://postgres:dev@127.0.0.1:5432/botly_test";
@@ -105,5 +105,14 @@ describe("dashboard", () => {
     expect(one.botRank.map((b) => b.bot)).toEqual(["vip_bot"]);
     expect(none.current.sales).toBe(0);
     expect(none.funnel[0]!.n).toBe(0);
+  });
+  it("pessoas do funil: quem gerou Pix, qual plano e se pagou", async () => {
+    const started = await funnelPeople(db, accountId, now, TZ, "today", undefined, [botId], "started");
+    expect(started.total).toBe(4);
+    const paid = await funnelPeople(db, accountId, now, TZ, "today", undefined, null, "paid");
+    expect(paid.total).toBe(3); // 2 do vip_bot + 1 do outro bot
+    expect(paid.people.every((p) => p.reached === "paid" && p.paid)).toBe(true);
+    const stopped = started.people.filter((p) => p.reached === "started");
+    expect(stopped.length).toBe(2);
   });
 });
