@@ -11,6 +11,7 @@ import { GatewaysPage } from "./pages/gateways";
 import { SettingsPage } from "./pages/settings";
 import { RetentionPage } from "./pages/retention";
 import { RemindersPage } from "./pages/reminders";
+import { ImportPage } from "./pages/import";
 
 function Wordmark() {
   return (
@@ -66,12 +67,10 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
           <NavLink to="/pagamentos">Formas de pagamento</NavLink>
           <NavLink to="/retencao">Retenção</NavLink>
           <NavLink to="/lembretes">Lembretes</NavLink>
+          <NavLink to="/importar">Importar assinantes</NavLink>
           <div className="nav-group">Em seguida</div>
           <span>
             Clientes <small>em breve</small>
-          </span>
-          <span>
-            Importar assinantes <small>em breve</small>
           </span>
           <div className="nav-group" />
           <NavLink to="/configuracoes">Configurações</NavLink>
@@ -102,6 +101,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             <Route path="/configuracoes" element={<SettingsPage />} />
             <Route path="/retencao" element={<RetentionPage />} />
             <Route path="/lembretes" element={<RemindersPage />} />
+            <Route path="/importar" element={<ImportPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>

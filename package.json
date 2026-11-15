@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Botly \u2014 plataforma multi-conta para vender acesso a canais do Telegram por bots (planos, Pix, upsell, renova\u00e7\u00e3o e corte autom\u00e1ticos)",
+  "description": "Botly — plataforma multi-conta para vender acesso a canais do Telegram por bots (planos, Pix, upsell, renovação e corte automáticos)",
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",
+    "exceljs": "^4.4.0",
     "fastify": "^5.12.5",
     "grammy": "^1.46.0",
     "ioredis": "^6.0.0",

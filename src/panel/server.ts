@@ -14,6 +14,7 @@ import { apiForToken } from "../bot/api.js";
 import { botToken } from "../bot/runtime.js";
 import type { Transformer } from "grammy";
 import { gatewayClient } from "../payments/gateway.js";
+import { analyze, applyImport, readSheet, suggestPlans } from "../domain/importer.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { hashPassword, LoginLimiter, newToken, passwordProblem, tokenHash, verifyPassword } from "./auth.js";
 
@@ -681,6 +682,80 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
       await planOutbox(ctx, a.id);
     }
     return { ok: true };
+  });
+
+  // ─── Importação de assinantes ───
+
+  const importBody = z.object({
+    botId: z.string().uuid(),
+    channelId: z.string().uuid(),
+    fileName: z.string().min(1).max(200),
+    data: z.string().min(10), // arquivo em base64
+    planMap: z.record(z.string(), z.string().uuid().nullable()).optional(),
+  });
+  async function readImport(req: FastifyRequest) {
+    const b = importBody.parse(req.body);
+    const bot = await ownBot(req, b.botId);
+    const channel = await ownChannel(req, b.channelId);
+    const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
+    const tz = a.settings.timezone ?? DEFAULT_TZ;
+    let parsed;
+    try {
+      parsed = await readSheet(Buffer.from(b.data, "base64"), b.fileName, tz);
+    } catch (err) {
+      throw new HttpError(400, err instanceof Error && /coluna|planilha/i.test(err.message) ? err.message : "Não consegui ler o arquivo. Envie a planilha .xlsx exportada (ou um .csv).");
+    }
+    const analysis = analyze(parsed.rows, ctx.now());
+    analysis.columns = parsed.columns;
+    return { b, bot, channel, analysis };
+  }
+
+  app.post("/api/import/preview", { bodyLimit: 20 * 1024 * 1024 }, async (req) => {
+    const { bot, channel, analysis } = await readImport(req);
+    const plans = await db.select().from(s.plans).where(eq(s.plans.botId, bot.id)).orderBy(asc(s.plans.sortOrder));
+    const existing = analysis.customers.length
+      ? (
+          await db
+            .select({ n: count() })
+            .from(s.accesses)
+            .innerJoin(s.customers, eq(s.customers.id, s.accesses.customerId))
+            .where(and(eq(s.accesses.channelId, channel.id), inArray(s.customers.telegramUserId, analysis.customers.slice(0, 5000).map((c) => c.telegramId))))
+        )[0]!.n
+      : 0;
+    return {
+      columns: analysis.columns,
+      lines: analysis.lines,
+      customers: analysis.customers.length,
+      active: analysis.active,
+      expired: analysis.expired,
+      alreadyInBotly: Number(existing),
+      invalid: analysis.invalid.slice(0, 20),
+      invalidCount: analysis.invalid.length,
+      groups: analysis.groups,
+      suggested: suggestPlans(analysis.groups, plans),
+      plans: plans.map((p) => ({ id: p.id, name: p.name, priceCents: p.priceCents })),
+      sample: analysis.customers
+        .filter((c) => c.expiresAt > ctx.now())
+        .sort((x, y) => x.expiresAt.getTime() - y.expiresAt.getTime())
+        .slice(0, 8)
+        .map((c) => ({ telegramId: c.telegramId, username: c.username, expiresAt: c.expiresAt, amountCents: c.amountCents, purchases: c.purchases })),
+    };
+  });
+
+  app.post("/api/import/confirm", { bodyLimit: 20 * 1024 * 1024 }, async (req) => {
+    const { b, bot, channel, analysis } = await readImport(req);
+    if (!analysis.customers.length) throw new HttpError(400, "Nenhum cliente válido para importar.");
+    const r = await applyImport(ctx, { accountId: acc(req), botId: bot.id, channelId: channel.id, analysis, planMap: b.planMap ?? {}, fileName: b.fileName, userId: req.user!.id });
+    // Já monta os lembretes dos importados.
+    await planOutbox(ctx, acc(req));
+    return r;
+  });
+
+  app.get("/api/imports", async (req) => {
+    const rows = await db.select().from(s.imports).where(eq(s.imports.accountId, acc(req))).orderBy(desc(s.imports.createdAt)).limit(30);
+    const bots = await db.select({ id: s.bots.id, username: s.bots.username }).from(s.bots).where(eq(s.bots.accountId, acc(req)));
+    const chans = await db.select({ id: s.channels.id, title: s.channels.title }).from(s.channels).where(eq(s.channels.accountId, acc(req)));
+    return rows.map((r) => ({ id: r.id, fileName: r.fileName, createdAt: r.createdAt, stats: r.stats, bot: bots.find((x) => x.id === r.botId)?.username ?? null, channel: chans.find((x) => x.id === r.channelId)?.title ?? null }));
   });
 
   // ─── Configurações da conta ───
