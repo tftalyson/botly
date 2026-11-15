@@ -662,7 +662,9 @@ function FunnelPeople({ q, initial, counts, onClose }: { q: string; initial: num
   const r = useLoad(() => get<{ total: number; people: Person[] }>(`/api/dashboard/people?${q}&step=${step}`), [q, step]);
   const list = (r.data?.people ?? []).filter((p) => !onlyStopped || p.reached === step);
   const tabs = useRef<HTMLDivElement>(null);
-  useEffect(() => tabs.current?.querySelector(".on")?.scrollIntoView({ inline: "center", block: "nearest" }), [step]);
+  useEffect(() => {
+    tabs.current?.querySelector(".on")?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [step]);
   return (
     <Modal title="Quem passou pelo funil" onClose={onClose} wide>
       <div className="tabs fp-tabs" ref={tabs}>
