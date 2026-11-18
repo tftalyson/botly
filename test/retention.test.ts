@@ -78,8 +78,9 @@ describe("lembretes", () => {
     expect(rows.every((r) => r.expectedCents > 0)).toBe(true);
   });
 
-  it("manda o lembrete que está na hora, com botão de renovar", async () => {
-    await sendDue(ctx, rt);
+  it("manda o lembrete que está na hora, com botão de renovar (dois processos ao mesmo tempo mandam uma vez só)", async () => {
+    await Promise.all([sendDue(ctx, rt), sendDue(ctx, rt)]);
+    expect(sent("sendMessage").filter((c) => String(c.payload.text).includes("vence em")).length).toBe(1);
     const m = sent("sendMessage").at(-1)!;
     expect(m.payload.text).toContain("vence em <b>3 dias</b> (18/11/2026)");
     expect(JSON.stringify(m.payload.reply_markup)).toContain(`rn:${accessId}`);

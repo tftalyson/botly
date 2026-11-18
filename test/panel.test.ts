@@ -1,5 +1,6 @@
 // API do painel: primeiro acesso, login, bots, canais, planos, pacotes e pagamentos.
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import * as s from "../src/db/schema.js";
 import type { Transformer } from "grammy";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb } from "../src/db/client.js";
@@ -92,6 +93,19 @@ describe("painel", () => {
     expect(w.body.welcome.media.mediaId).toBe(up.json().id);
     const got = await app.inject({ method: "GET", url: `/api/media/${up.json().id}`, headers: { cookie } });
     expect(got.rawPayload.equals(png)).toBe(true);
+    // Não apaga forma de pagamento com Pix em aberto: sugere desativar; depois de vencer, apaga.
+    const gw2 = await call("POST", "/api/gateways", { provider: "pushinpay", label: "Reserva", key: "token-reserva-123" });
+    const acct = (await db.select().from(s.accounts))[0]!;
+    const [cu] = await db.insert(s.customers).values({ accountId: acct.id, telegramUserId: 777 }).returning();
+    const [od] = await db.insert(s.orders).values({ accountId: acct.id, customerId: cu!.id, kind: "new", items: [], subtotalCents: 1000, totalCents: 1000 }).returning();
+    const [ch] = await db.insert(s.charges).values({ accountId: acct.id, orderId: od!.id, gatewayId: gw2.body.id, provider: "pushinpay", providerTxId: "tx-aberto", amountCents: 1000 }).returning();
+    const del = await call("DELETE", `/api/gateways/${gw2.body.id}`);
+    expect(del.status).toBe(409);
+    expect(del.body.error).toContain("1 Pix em aberto");
+    expect((await call("GET", "/api/gateways")).body.length).toBe(2);
+    await db.update(s.charges).set({ status: "expired" }).where(eq(s.charges.id, ch!.id));
+    expect((await call("DELETE", `/api/gateways/${gw2.body.id}`)).status).toBe(200);
+    expect((await call("GET", "/api/gateways")).body.length).toBe(1);
     const ov = (await call("GET", "/api/overview")).body;
     expect(ov.checklist).toEqual({ gateway: true, bot: true, channel: true, mainChannel: true, plans: true, routing: true });
   });

@@ -459,7 +459,7 @@ export const outbox = pgTable(
     scheduledFor: ts("scheduled_for").notNull(),
     /** Valor esperado se o cliente renovar (soma da coluna na Retenção). */
     expectedCents: integer("expected_cents").notNull().default(0),
-    status: text("status", { enum: ["scheduled", "sent", "failed", "skipped"] }).notNull().default("scheduled"),
+    status: text("status", { enum: ["scheduled", "sending", "sent", "failed", "skipped"] }).notNull().default("scheduled"),
     /** O que aconteceu depois: renovou, renovou com upsell, ou nada. */
     outcome: text("outcome", { enum: ["renewed", "renewed_upsell", "none"] }),
     error: text("error"),

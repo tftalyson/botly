@@ -136,7 +136,19 @@ export async function sendDue(ctx: Ctx, rt: BotlyRuntime, limit = 40) {
     .where(and(eq(s.outbox.status, "scheduled"), lte(s.outbox.scheduledFor, now)))
     .orderBy(asc(s.outbox.scheduledFor))
     .limit(limit);
+  // Envio interrompido no meio (processo caiu): não reenvia, para não duplicar; fica como falha.
+  await ctx.db
+    .update(s.outbox)
+    .set({ status: "failed", error: "envio interrompido" })
+    .where(and(eq(s.outbox.status, "sending"), lte(s.outbox.sentAt, new Date(now.getTime() - 10 * 60_000))));
   for (const o of due) {
+    // Reserva o item antes de enviar: se outro processo (deploy em andamento) pegou, pula.
+    const claimed = await ctx.db
+      .update(s.outbox)
+      .set({ status: "sending", sentAt: now })
+      .where(and(eq(s.outbox.id, o.id), eq(s.outbox.status, "scheduled")))
+      .returning({ id: s.outbox.id });
+    if (!claimed.length) continue;
     const skip = (error: string) => ctx.db.update(s.outbox).set({ status: "skipped", error }).where(eq(s.outbox.id, o.id));
     try {
       const a = o.accessId ? (await ctx.db.select().from(s.accesses).where(eq(s.accesses.id, o.accessId)))[0] : undefined;
@@ -214,7 +226,7 @@ export async function sendDue(ctx: Ctx, rt: BotlyRuntime, limit = 40) {
       // Falha de rede (o Telegram não respondeu): tenta de novo na próxima rodada, até 5 vezes.
       const tries = Number(o.error?.match(/tentativa (\d+)/)?.[1] ?? 0) + 1;
       if (/Network request|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|429|Too Many Requests|5\d\d/i.test(msg) && tries < 5) {
-        await ctx.db.update(s.outbox).set({ error: `falha de rede, tentativa ${tries}` }).where(eq(s.outbox.id, o.id));
+        await ctx.db.update(s.outbox).set({ status: "scheduled", sentAt: null, error: `falha de rede, tentativa ${tries}` }).where(eq(s.outbox.id, o.id));
       } else await ctx.db.update(s.outbox).set({ status: "failed", error: msg.slice(0, 300) }).where(eq(s.outbox.id, o.id));
     }
   }

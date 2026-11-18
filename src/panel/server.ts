@@ -660,6 +660,15 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
 
   app.delete<{ Params: { id: string } }>("/api/gateways/:id", async (req) => {
     const id = req.params.id;
+    const g = (await db.select().from(s.gateways).where(and(eq(s.gateways.id, id), eq(s.gateways.accountId, acc(req)))))[0];
+    if (!g) throw new HttpError(404, "Forma de pagamento não encontrada.");
+    // Pix ainda em aberto (24 h) precisa dessa forma de pagamento para ser conferido e liberar o acesso.
+    const [{ n: abertos }] = (await db
+      .select({ n: count() })
+      .from(s.charges)
+      .where(and(eq(s.charges.gatewayId, id), eq(s.charges.status, "pending"), gt(s.charges.createdAt, new Date(ctx.now().getTime() - 24 * 3600_000))))) as [{ n: number }];
+    if (abertos > 0) throw new HttpError(409, `Esta forma de pagamento tem ${abertos} Pix em aberto que ainda podem ser pagos. Desative em vez de apagar (os bots param de usar, mas os Pix pendentes continuam sendo conferidos). Para apagar, espere 24 horas.`);
+    await db.insert(s.auditLog).values({ accountId: g.accountId, userId: req.user!.id, action: "pagamento_removido", meta: { label: g.label, provider: g.provider } });
     const bots = await db.select().from(s.bots).where(eq(s.bots.accountId, acc(req)));
     for (const b of bots)
       if (b.routing.gatewayIds.includes(id)) await db.update(s.bots).set({ routing: { ...b.routing, gatewayIds: b.routing.gatewayIds.filter((x) => x !== id) } }).where(eq(s.bots.id, b.id));
