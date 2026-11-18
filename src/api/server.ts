@@ -44,7 +44,7 @@ export function buildApi(ctx: Ctx, rt: BotlyRuntime, opts: { logger?: boolean } 
       return reply.code(401).send({ ok: false });
     }
     const txId = g.provider === "pushinpay" ? ppIdFrom(req.body) : findTxn(req.body);
-    ctx.log.info({ provider: g.provider, txId, body: JSON.stringify(req.body ?? null).slice(0, 500) }, "aviso de pagamento recebido");
+    ctx.log.info({ provider: g.provider, txId }, "aviso de pagamento recebido"); // sem o corpo: pode ter dados do pagador
     if (!txId) return reply.send({ ok: true, ignored: "sem id" });
     const charge = (
       await ctx.db

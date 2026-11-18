@@ -19,7 +19,7 @@ import { analyze, applyImport, readSheet, suggestPlans } from "../domain/importe
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { agentReply, assume, closeTicket, customerTrail, isSupportOpen, supportHours } from "../domain/support.js";
 import { InlineKeyboard } from "grammy";
-import { hashPassword, LoginLimiter, newToken, passwordProblem, tokenHash, verifyPassword } from "./auth.js";
+import { DUMMY_HASH, hashPassword, LoginLimiter, newToken, passwordProblem, tokenHash, verifyPassword } from "./auth.js";
 
 const COOKIE = "botly_sess";
 const SESSION_DAYS = 30;
@@ -80,15 +80,32 @@ const unit = z.enum(["day", "month", "year", "lifetime"]);
 export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: boolean; logger?: boolean; transformer?: Transformer } = {}) {
   const { db } = ctx;
   const limiter = new LoginLimiter();
+  const ipLimiter = new LoginLimiter(40);
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 1_000_000, trustProxy: true });
   const webDir = resolve(opts.webDir ?? "dist-web");
   const cookie = (token: string, maxAge: number) => `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${opts.secureCookies ? "; Secure" : ""}`;
   const tgApi = (row: typeof s.bots.$inferSelect) => apiForToken(botToken(row, ctx.appSecret), opts.transformer);
 
+  const CSP = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob: https:",
+    "media-src 'self' blob: https:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
   app.addHook("onSend", async (_req, reply) => {
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "DENY");
     reply.header("Referrer-Policy", "same-origin");
+    reply.header("Content-Security-Policy", CSP);
+    reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (opts.secureCookies) reply.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   });
 
   app.setErrorHandler((err, req, reply) => {
@@ -127,7 +144,8 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
   }
 
   const PUBLIC = new Set(["/api/login", "/api/setup"]);
-  app.addHook("preHandler", async (req, reply) => {
+  // Roda ANTES de ler o corpo da requisição: quem não está logado não consegue nem enviar arquivos grandes.
+  app.addHook("onRequest", async (req, reply) => {
     if (!req.url.startsWith("/api/")) return;
     // Proteção contra formulários de outros sites: alterações exigem o cabeçalho do painel.
     if (req.method !== "GET" && req.headers["x-botly"] !== "1") return reply.code(403).send({ error: "Requisição recusada." });
@@ -136,6 +154,9 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     const u = await loadUser(req);
     if (!u) return reply.code(401).send({ error: "Entre de novo para continuar." });
     req.user = u;
+    // Corpo binário grande só nos envios de mídia; nas outras rotas o limite é o padrão (1 MB).
+    const len = Number(req.headers["content-length"] ?? 0);
+    if (len > 1_000_000 && !(path === "/api/media" || path.startsWith("/api/import/"))) return reply.code(413).send({ error: "Arquivo grande demais para esta ação." });
   });
   const acc = (req: FastifyRequest) => req.user!.accountId;
 
@@ -164,10 +185,13 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
   app.post("/api/login", async (req, reply) => {
     const b = z.object({ email: z.string().trim(), password: z.string() }).parse(req.body);
     const key = `${req.ip}|${b.email.toLowerCase()}`;
-    if (limiter.blocked(key)) throw new HttpError(429, "Muitas tentativas. Espere 15 minutos e tente de novo.");
+    if (limiter.blocked(key) || ipLimiter.blocked(req.ip)) throw new HttpError(429, "Muitas tentativas. Espere 15 minutos e tente de novo.");
     const u = (await db.select().from(s.users).where(sql`lower(${s.users.email}) = ${b.email.toLowerCase()}`))[0];
-    if (!u || !u.active || !(await verifyPassword(b.password, u.passwordHash))) {
+    // E-mail que não existe gasta o mesmo tempo (não revela quais e-mails têm conta).
+    const ok = await verifyPassword(b.password, u?.passwordHash ?? DUMMY_HASH);
+    if (!u || !u.active || !ok) {
       limiter.fail(key);
+      ipLimiter.fail(req.ip);
       throw new HttpError(401, "E-mail ou senha incorretos.");
     }
     limiter.reset(key);
@@ -718,6 +742,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
         upsell: items.filter((i) => i.outcome === "renewed_upsell").length,
       },
       autoRemove: !!a.settings.autoRemove,
+      removalsNoManager: removals.filter((r) => r.noManager).length,
       removals: removals.map((r) => ({ id: r.id, expiresAt: r.expiresAt, channel: r.channel, name: r.username ? "@" + r.username : (r.firstName ?? String(r.tg)) })),
     };
   });

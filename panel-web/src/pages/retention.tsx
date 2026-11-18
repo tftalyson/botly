@@ -23,6 +23,7 @@ interface Data {
   items: Item[];
   totals: { expectedCents: number; customers: number; sent: number; scheduled: number; renewed: number; upsell: number };
   autoRemove: boolean;
+  removalsNoManager: number;
   removals: { id: string; expiresAt: string | null; channel: string; name: string }[];
 }
 
@@ -166,6 +167,11 @@ function RemovalPanel({ data, reload }: { data: Data; reload: () => void }) {
           {data.autoRemove ? "Ligada" : "Simulação"}
         </Toggle>
       </div>
+      {data.removalsNoManager > 0 && (
+        <p className="note warn">
+          ⚠️ {data.removalsNoManager} {data.removalsNoManager === 1 ? "pessoa vencida está" : "pessoas vencidas estão"} em canal sem bot gestor, então não {data.removalsNoManager === 1 ? "pode" : "podem"} ser {data.removalsNoManager === 1 ? "removida" : "removidas"}. Escolha o bot gestor na página Canais.
+        </p>
+      )}
       {data.removals.length > 0 ? (
         <>
           <p className="small muted">

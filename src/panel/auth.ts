@@ -10,6 +10,9 @@ export async function hashPassword(password: string): Promise<string> {
   return `scrypt$${salt.toString("base64")}$${hash.toString("base64")}`;
 }
 
+/** Hash falso para gastar o mesmo tempo quando o e-mail não existe. */
+export const DUMMY_HASH = "scrypt$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+
 export async function verifyPassword(password: string, stored: string | null | undefined): Promise<boolean> {
   if (!stored) return false;
   const [kind, salt, hash] = stored.split("$");
@@ -43,6 +46,7 @@ export class LoginLimiter {
   }
   fail(key: string, now = Date.now()) {
     const h = this.hits.get(key);
+    if (this.hits.size > 5000) for (const [k, v] of this.hits) if (v.until <= now) this.hits.delete(k);
     if (!h || h.until <= now) this.hits.set(key, { n: 1, until: now + this.windowMs });
     else h.n++;
   }

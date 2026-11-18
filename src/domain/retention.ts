@@ -261,7 +261,10 @@ export async function cutExpired(ctx: Ctx, rt: BotlyRuntime, limit = 50) {
       .limit(limit);
     for (const r of toRemove) {
       const managerId = r.ch.managerBotId;
-      if (!managerId) continue;
+      if (!managerId) continue; // aparece como aviso na página Retenção
+      // Reconfere logo antes de banir: se renovou nesse meio tempo, não remove.
+      const fresh = (await ctx.db.select({ status: s.accesses.status }).from(s.accesses).where(eq(s.accesses.id, r.a.id)))[0];
+      if (fresh?.status !== "expired") continue;
       try {
         await removeFromChannel(ctx, await rt.api(managerId), { channel: r.ch, customer: r.c, reason: "expired" });
       } catch (err) {
@@ -301,7 +304,7 @@ export async function retentionWindow(ctx: Ctx, accountId: string, from: Date, t
 /** Vencidos esperando remoção (modo simulação mostra estes). */
 export async function pendingRemovals(ctx: Ctx, accountId: string) {
   return ctx.db
-    .select({ id: s.accesses.id, expiresAt: s.accesses.expiresAt, channel: sql<string>`coalesce(${s.channels.displayName}, ${s.channels.title})`, username: s.customers.username, firstName: s.customers.firstName, tg: s.customers.telegramUserId })
+    .select({ id: s.accesses.id, noManager: sql<boolean>`${s.channels.managerBotId} is null`, expiresAt: s.accesses.expiresAt, channel: sql<string>`coalesce(${s.channels.displayName}, ${s.channels.title})`, username: s.customers.username, firstName: s.customers.firstName, tg: s.customers.telegramUserId })
     .from(s.accesses)
     .innerJoin(s.channels, eq(s.channels.id, s.accesses.channelId))
     .innerJoin(s.customers, eq(s.customers.id, s.accesses.customerId))

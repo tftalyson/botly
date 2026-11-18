@@ -58,6 +58,21 @@ describe("painel", () => {
     cookie = saved;
   });
 
+  it("segurança: cabeçalhos, login antes do corpo e limite de tamanho", async () => {
+    const h = await app.inject({ method: "GET", url: "/health" });
+    expect(String(h.headers["content-security-policy"])).toContain("frame-ancestors 'none'");
+    // Sem login, nem lê o arquivo grande: responde 401 direto.
+    const big = Buffer.alloc(3 * 1024 * 1024);
+    const anon = await app.inject({ method: "POST", url: "/api/media?name=a.png&mime=image/png", payload: big, headers: { "x-botly": "1", "content-type": "application/octet-stream" } });
+    expect(anon.statusCode).toBe(401);
+    // Logado, corpo grande fora das rotas de mídia/importação é recusado.
+    const big2 = await app.inject({ method: "POST", url: "/api/bots", payload: big, headers: { cookie, "x-botly": "1", "content-type": "application/octet-stream" } });
+    expect(big2.statusCode).toBe(413);
+    // E-mail inexistente e senha errada dão a mesma resposta.
+    const r1 = await app.inject({ method: "POST", url: "/api/login", payload: { email: "ninguem@x.com", password: "qualquer123" }, headers: { "x-botly": "1" } });
+    expect(r1.statusCode).toBe(401);
+  });
+
   it("bots, canais, planos, pacotes e pagamento", async () => {
     expect((await call("POST", "/api/bots", { token: "abc" })).body.error).toContain("Token inválido");
     const bot = await call("POST", "/api/bots", { token: "555:" + "B".repeat(35) });
