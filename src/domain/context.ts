@@ -7,6 +7,8 @@ export interface Ctx {
   publicUrl: string;
   fetch: typeof fetch;
   now: () => Date;
+  /** Chamado quando um Pix é pago com valor menor que o cobrado (quem monta o ctx liga isso aos avisos). */
+  onUnderpaid?: (info: { chargeId: string; paidCents: number }) => Promise<void>;
   log: { info: (o: unknown, m?: string) => void; warn: (o: unknown, m?: string) => void; error: (o: unknown, m?: string) => void };
 }
 

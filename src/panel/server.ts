@@ -17,7 +17,7 @@ import { gatewayClient } from "../payments/gateway.js";
 import { dashboard, funnelPeople, FUNNEL_STEPS, type FunnelStep, type RangeKey } from "./dashboard.js";
 import { analyze, applyImport, readSheet, suggestPlans } from "../domain/importer.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
-import { agentReply, assume, closeTicket, isSupportOpen, supportHours } from "../domain/support.js";
+import { agentReply, assume, closeTicket, customerTrail, isSupportOpen, supportHours } from "../domain/support.js";
 import { InlineKeyboard } from "grammy";
 import { hashPassword, LoginLimiter, newToken, passwordProblem, tokenHash, verifyPassword } from "./auth.js";
 
@@ -993,6 +993,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
       },
       accesses: accesses.map((r) => ({ id: r.a.id, channel: r.ch.displayName?.trim() || r.ch.title, status: r.a.status, expiresAt: r.a.expiresAt })),
       orders: orders.map((r) => ({ id: r.o.id, createdAt: r.o.createdAt, status: r.o.status, kind: r.o.kind, totalCents: r.o.totalCents, items: r.o.items.map((i) => i.name), bot: r.bot })),
+      trail: await customerTrail(ctx, t.accountId, c.id),
       messages: msgs.map((m) => ({ id: m.id, sender: m.sender, text: m.text, mediaType: m.mediaType, agentName: m.agentName, createdAt: m.createdAt })),
     };
   });

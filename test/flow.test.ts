@@ -2,7 +2,7 @@
 // cadastro → /start → maioridade → planos → order bump → Pix → aviso de pagamento
 // → acessos liberados → pedido de entrada aprovado/recusado.
 import { randomBytes } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { Transformer } from "grammy";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb } from "../src/db/client.js";
@@ -14,6 +14,8 @@ import { encryptJson } from "../src/lib/crypto.js";
 import { silentLog } from "../src/lib/log.js";
 import { addDuration, extendExpiry, startOfDay } from "../src/lib/time.js";
 import { createRuntime } from "../src/bot/runtime.js";
+import { announceUnderpaid } from "../src/bot/notify.js";
+import { checkCharge } from "../src/domain/sales.js";
 import { apiForToken } from "../src/bot/api.js";
 import { buildApi } from "../src/api/server.js";
 import { gatewayOrder } from "../src/payments/routing.js";
@@ -32,6 +34,7 @@ const { db, sql: pg } = createDb(URL);
 let now = new Date("2026-11-15T13:00:00Z");
 const calls: { method: string; payload: any }[] = [];
 const pixPaid = new Set<string>();
+const pixValue = new Map<string, number>(); // valor que o gateway diz ter recebido (padrão 3480)
 let pixSeq = 0;
 
 const tg: Transformer = async (_prev, method, payload: any) => {
@@ -64,13 +67,14 @@ const fakeFetch = (async (input: any, init?: any) => {
   const m = u.match(/\/transactions\/(.+)$/);
   if (m) {
     const id = decodeURIComponent(m[1]!);
-    return new Response(JSON.stringify({ id, status: pixPaid.has(id) ? "paid" : "created", value: 3480 }), { status: 200 });
+    return new Response(JSON.stringify({ id, status: pixPaid.has(id) ? "paid" : "created", value: pixValue.get(id) ?? 3480 }), { status: 200 });
   }
   return new Response("{}", { status: 404 });
 }) as typeof fetch;
 
 const ctx: Ctx = { db, appSecret: SECRET, publicUrl: "https://api.teste", fetch: fakeFetch, now: () => now, log: silentLog };
 const rt = createRuntime(ctx, { transformer: tg });
+ctx.onUnderpaid = (info) => announceUnderpaid(ctx, rt, info);
 let upd = 0;
 const user = { id: USER, is_bot: false, first_name: "João", username: "joao" };
 const msg = (text: string) => ({ update_id: ++upd, message: { message_id: upd, date: 0, chat: { id: USER, type: "private" }, from: user, text, entities: text.startsWith("/") ? [{ type: "bot_command", offset: 0, length: text.split(" ")[0]!.length }] : undefined } });
@@ -323,5 +327,40 @@ describe("rotação de gateways", () => {
     expect(fixed[0]!.id).toBe(gatewayId);
     const avoid = await gatewayOrder(db, accountId, { mode: "fixed", gatewayIds: [gatewayId, g2!.id] }, now, "America/Sao_Paulo", { avoid: gatewayId });
     expect(avoid[0]!.id).toBe(g2!.id);
+  });
+});
+
+describe("valor diferente do pedido", () => {
+  it("não libera, explica ao cliente, abre atendimento, avisa o canal (uma vez) e mostra o rastro", async () => {
+    await db.update(s.accounts).set({ settings: { ageGate: true, notifyChatId: -555 } }).where(eq(s.accounts.id, accountId));
+    now = new Date("2027-02-01T13:00:00Z");
+    await rt.handle(botId, cb(`p:${planId}`) as any);
+    const order = (await db.select().from(s.orders).where(eq(s.orders.status, "pending")).orderBy(desc(s.orders.createdAt)))[0]!;
+    const ch = (await db.select().from(s.charges).where(eq(s.charges.orderId, order.id)))[0]!;
+    pixPaid.add(ch.providerTxId!);
+    pixValue.set(ch.providerTxId!, 100); // pagou R$ 1,00 em vez do valor do plano
+    calls.length = 0;
+
+    expect(await checkCharge(ctx, ch.id)).toBe("pending");
+    expect(await checkCharge(ctx, ch.id)).toBe("pending"); // conferência repetida não avisa de novo
+
+    expect((await db.select().from(s.orders).where(eq(s.orders.id, order.id)))[0]!.status).toBe("pending");
+    const msgs = sent("sendMessage");
+    expect(msgs.filter((m) => m.payload.chat_id === USER && String(m.payload.text).includes("valor foi diferente")).length).toBe(1);
+    expect(msgs.filter((m) => m.payload.chat_id === -555 && String(m.payload.text).includes("Valor divergente")).length).toBe(1);
+
+    const tk = (await db.select().from(s.supportTickets).where(eq(s.supportTickets.topic, "pagamento com valor diferente")))[0]!;
+    expect(["open", "active"]).toContain(tk.status);
+    const sys = await db.select().from(s.supportMessages).where(eq(s.supportMessages.ticketId, tk.id));
+    expect(sys.some((m) => m.sender === "system" && String(m.text).includes("O acesso NÃO foi liberado"))).toBe(true);
+
+    const app = buildPanel(ctx, { transformer: tg, webDir: "/nao-existe" });
+    const login = await app.inject({ method: "POST", url: "/api/login", payload: { email: "t@t.com", password: "senha-forte-1" }, headers: { "x-botly": "1" } });
+    const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+    const det = (await app.inject({ method: "GET", url: `/api/support/${tk.id}`, headers: { cookie } })).json();
+    expect(det.trail.steps.find((x: any) => x.key === "started").reached).toBe(true);
+    expect(det.trail.events.some((e: any) => e.type === "underpaid" && e.label.includes("valor diferente"))).toBe(true);
+    expect(det.trail.stoppedAt).toBeNull(); // este cliente já tinha passado por todas as etapas
+    await app.close();
   });
 });

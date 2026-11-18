@@ -200,6 +200,17 @@ export async function checkCharge(ctx: Ctx, chargeId: string): Promise<PaidResul
   if (!st.paid) return "pending";
   if (st.amountCents !== null && st.amountCents < charge.amountCents) {
     ctx.log.warn({ chargeId, paid: st.amountCents, expected: charge.amountCents }, "pago com valor menor: não liberado");
+    // Avisa uma vez só por cobrança e valor (a conferência roda todo minuto).
+    try {
+      const seen = await ctx.db
+        .select({ id: s.events.id })
+        .from(s.events)
+        .where(and(eq(s.events.accountId, charge.accountId), eq(s.events.type, "underpaid"), sql`${s.events.meta}->>'chargeId' = ${charge.id}`, sql`${s.events.meta}->>'paidCents' = ${String(st.amountCents)}`))
+        .limit(1);
+      if (!seen.length && ctx.onUnderpaid) await ctx.onUnderpaid({ chargeId: charge.id, paidCents: st.amountCents });
+    } catch (err) {
+      ctx.log.warn({ chargeId, err: String(err) }, "falha ao avisar valor divergente");
+    }
     return "pending";
   }
   return markChargePaid(ctx, charge.id, st);

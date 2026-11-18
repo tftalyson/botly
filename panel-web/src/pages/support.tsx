@@ -35,6 +35,7 @@ interface Detail {
   accesses: { id: string; channel: string; status: string; expiresAt: string | null }[];
   orders: { id: string; createdAt: string; status: string; kind: string; totalCents: number; items: string[]; bot: string | null }[];
   messages: Msg[];
+  trail: { steps: { key: string; label: string; reached: boolean }[]; stoppedAt: string | null; events: { type: string; at: string; label: string; bot: string | null }[] };
 }
 
 const TZ = "America/Sao_Paulo";
@@ -333,6 +334,26 @@ function CustomerSide({ d, open, act, busy }: { d: Detail; open: boolean; act: (
         <button className="btn small" disabled={busy} onClick={() => act("send-links", "Links enviados ao cliente.")}>
           Reenviar links dos canais
         </button>
+      )}
+      <h3>Rastro do cliente</h3>
+      <ol className="trail-steps">
+        {d.trail.steps.map((st) => (
+          <li key={st.key} className={st.reached ? "done" : "todo"}>
+            <i aria-hidden>{st.reached ? "✓" : "·"}</i>
+            {st.label}
+          </li>
+        ))}
+      </ol>
+      {d.trail.stoppedAt && <p className="trail-stop">Parou antes de: <strong>{d.trail.stoppedAt}</strong></p>}
+      {d.trail.events.length > 0 && (
+        <ul className="trail-events">
+          {d.trail.events.map((e, i) => (
+            <li key={i} className={e.type === "underpaid" ? "warn" : ""}>
+              <time>{fullDate(e.at)}</time>
+              <span>{e.label}</span>
+            </li>
+          ))}
+        </ul>
       )}
       <h3>Últimos pedidos</h3>
       {d.orders.length === 0 ? (

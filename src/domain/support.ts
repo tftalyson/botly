@@ -94,3 +94,69 @@ export async function closeTicket(ctx: Ctx, api: Api | null, ticket: Ticket, by:
       .catch(() => {});
   }
 }
+
+const STEP_LABEL: Record<string, string> = { started: "Deu /start", viewed_plans: "Viu os planos", chose_plan: "Escolheu um plano", pix_generated: "Gerou o Pix", paid: "Pagou", joined: "Entrou no canal" };
+const STEPS = ["started", "viewed_plans", "chose_plan", "pix_generated", "paid", "joined"] as const;
+
+/** Rastro do cliente: até onde chegou no funil e o que aconteceu (mais recente primeiro). */
+export async function customerTrail(ctx: Ctx, accountId: string, customerId: string) {
+  const evs = await ctx.db
+    .select({ type: s.events.type, meta: s.events.meta, at: s.events.createdAt, botId: s.events.botId })
+    .from(s.events)
+    .where(and(eq(s.events.accountId, accountId), eq(s.events.customerId, customerId)))
+    .orderBy(desc(s.events.createdAt))
+    .limit(80);
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const ids = (k: string) => [...new Set(evs.map((e) => e.meta?.[k]).filter((x): x is string => typeof x === "string" && UUID.test(x)))];
+  const planIds = ids("planId");
+  const bundleIds = ids("bundleId");
+  const plans = planIds.length ? await ctx.db.select({ id: s.plans.id, name: s.plans.name }).from(s.plans).where(inArray(s.plans.id, planIds)) : [];
+  const bundles = bundleIds.length ? await ctx.db.select({ id: s.bundles.id, name: s.bundles.name }).from(s.bundles).where(inArray(s.bundles.id, bundleIds)) : [];
+  const bots = await ctx.db.select({ id: s.bots.id, username: s.bots.username }).from(s.bots).where(eq(s.bots.accountId, accountId));
+  const brl = (c: unknown) => (typeof c === "number" ? ` de ${(c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}` : "");
+  const label = (e: (typeof evs)[number]): string => {
+    const m = e.meta ?? {};
+    switch (e.type) {
+      case "started": return "Deu /start";
+      case "age_confirmed": return "Confirmou a maioridade";
+      case "viewed_plans": return "Viu os planos";
+      case "chose_plan": {
+        const n = plans.find((p) => p.id === m.planId)?.name ?? bundles.find((b) => b.id === m.bundleId)?.name;
+        return n ? `Escolheu ${m.bundleId ? "o pacote" : "o plano"} ${n}` : "Escolheu um plano";
+      }
+      case "bump_offered": return "Recebeu a oferta de canal extra";
+      case "bump_accepted": return "Aceitou o canal extra";
+      case "bump_declined": return "Recusou o canal extra";
+      case "pix_generated": return `Gerou um Pix${brl(m.totalCents)}${typeof m.provider === "string" ? ` (${m.provider})` : ""}`;
+      case "paid": return "Pagou";
+      case "renewed": return "Renovou";
+      case "underpaid": return `Pagou valor diferente (${typeof m.paidCents === "number" ? (m.paidCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "?"} em vez de ${typeof m.expectedCents === "number" ? (m.expectedCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "?"})`;
+      case "joined": return "Entrou no canal";
+      case "join_declined": return "Pediu para entrar, mas foi recusado (sem acesso ativo)";
+      case "reminder_sent": return "Recebeu lembrete de vencimento";
+      case "winback_sent": return "Recebeu mensagem para voltar";
+      case "renew_clicked": return "Clicou em renovar";
+      case "expired": return "Acesso venceu";
+      case "removed": return "Foi removido do canal";
+      default: return e.type;
+    }
+  };
+  const seen = new Set(evs.map((e) => e.type));
+  const reached: Record<string, boolean> = {
+    started: seen.has("started"),
+    viewed_plans: seen.has("viewed_plans"),
+    chose_plan: seen.has("chose_plan"),
+    pix_generated: seen.has("pix_generated"),
+    paid: seen.has("paid") || seen.has("renewed"),
+    joined: seen.has("joined"),
+  };
+  // Quem comprou/renovou sem passar pelo funil (importado) conta como tendo passado pelas etapas anteriores.
+  const last = STEPS.reduce((acc, k, i) => (reached[k] ? i : acc), -1);
+  const steps = STEPS.map((k, i) => ({ key: k, label: STEP_LABEL[k]!, reached: reached[k] || i < last }));
+  const firstMissing = steps.find((x) => !x.reached);
+  return {
+    steps,
+    stoppedAt: last >= 0 && firstMissing ? firstMissing.label : null,
+    events: evs.map((e) => ({ type: e.type, at: e.at, label: label(e), bot: bots.find((b) => b.id === e.botId)?.username ?? null })),
+  };
+}

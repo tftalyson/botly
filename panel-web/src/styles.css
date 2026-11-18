@@ -453,3 +453,14 @@ table.people .nowrap { white-space: nowrap; }
   table.people td.who strong, table.people td.who small { display: inline; margin-right: 6px; }
   .fp-tabs { margin-right: -24px; }
 }
+
+.trail-steps { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.trail-steps li { display: flex; gap: 8px; align-items: center; }
+.trail-steps i { font-style: normal; width: 16px; text-align: center; font-weight: 700; }
+.trail-steps .done { color: #0E9F86; }
+.trail-steps .todo { color: #8a8798; }
+.trail-stop { margin: 0 0 8px; font-size: 13px; }
+.trail-events { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; max-height: 220px; overflow: auto; font-size: 12.5px; }
+.trail-events li { display: grid; gap: 1px; }
+.trail-events time { color: #8a8798; font-size: 11.5px; }
+.trail-events .warn span { color: #B42318; font-weight: 600; }
