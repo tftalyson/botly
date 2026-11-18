@@ -121,6 +121,12 @@ describe("painel", () => {
     await db.update(s.charges).set({ status: "expired" }).where(eq(s.charges.id, ch!.id));
     expect((await call("DELETE", `/api/gateways/${gw2.body.id}`)).status).toBe(200);
     expect((await call("GET", "/api/gateways")).body.length).toBe(1);
+    const srcs = (await call("GET", "/api/import/sources")).body;
+    expect(srcs.map((x: any) => x.id)).toEqual(["automatizzebot", "planilha"]);
+    expect(srcs[0].steps.length).toBeGreaterThan(2);
+    const badSrc = await call("POST", "/api/import/preview", { source: "inexistente", botId: bot.body.id, channelId: c1.body.id, fileName: "a.xlsx", data: "QUJDREVGR0hJSg==" });
+    expect(badSrc.status).toBe(400);
+    expect(badSrc.body.error).toContain("Sistema de origem");
     const ov = (await call("GET", "/api/overview")).body;
     expect(ov.checklist).toEqual({ gateway: true, bot: true, channel: true, mainChannel: true, plans: true, routing: true });
   });

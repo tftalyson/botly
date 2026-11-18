@@ -28,8 +28,18 @@ interface Preview {
 interface Done {
   stats: Record<string, number>;
 }
+interface Source {
+  id: string;
+  name: string;
+  tagline: string;
+  steps: string[];
+  warnings: string[];
+  accept: string;
+  fileHint: string;
+}
 interface PastImport {
   id: string;
+  source: string;
   fileName: string;
   createdAt: string;
   stats: Record<string, number>;
@@ -54,6 +64,8 @@ export function ImportPage() {
   const bots = useLoad(() => get<BotListItem[]>("/api/bots"));
   const chans = useLoad(() => get<Channel[]>("/api/channels"));
   const past = useLoad(() => get<PastImport[]>("/api/imports"));
+  const sources = useLoad(() => get<Source[]>("/api/import/sources"));
+  const [sourceId, setSourceId] = useState("");
   const [botId, setBotId] = useState("");
   const [channelId, setChannelId] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -71,12 +83,14 @@ export function ImportPage() {
     if (ch) setChannelId(ch.id);
   }, [botId, bots.data, chans.data]);
 
-  if (!bots.data || !chans.data) return <Loading error={bots.error ?? chans.error} />;
+  if (!bots.data || !chans.data || !sources.data) return <Loading error={bots.error ?? chans.error ?? sources.error} />;
+  const source = sources.data.find((x) => x.id === sourceId);
 
   async function payload() {
+    if (!source) throw new Error("Escolha de qual sistema você está vindo.");
     if (!file) throw new Error("Escolha o arquivo.");
     if (!botId || !channelId) throw new Error("Escolha o bot e o canal.");
-    return { botId, channelId, fileName: file.name, data: await fileToBase64(file) };
+    return { source: source.id, botId, channelId, fileName: file.name, data: await fileToBase64(file) };
   }
   const preview = () =>
     run(async () => {
@@ -104,16 +118,44 @@ export function ImportPage() {
 
       {!done && (
         <div className="panel stack">
-          <ol className="howto">
-            <li>
-              No AutomatizzeBot, abra <b>Assinantes</b> do bot, filtre por <b>Aprovado</b> e clique no ícone de planilha ao lado de <b>BUSCAR</b>. Ele baixa o <code>assinantes.xlsx</code>.
-            </li>
-            <li>Escolha abaixo o bot que vai cobrar esses clientes no Botly e o canal deles.</li>
-            <li>Suba o arquivo, confira a prévia e confirme.</li>
-          </ol>
-          <div className="note warn small">
-            Faça a importação no <b>dia da virada</b>, com o bot do Botly usando o <b>mesmo token</b> do bot antigo. Assim o bot consegue mandar mensagem para todos eles.
+          <div>
+            <h2 style={{ marginBottom: 8 }}>1. De qual sistema você está vindo?</h2>
+            <div className="grid-2">
+              {sources.data.map((x) => (
+                <button
+                  key={x.id}
+                  type="button"
+                  className={`panel pick${x.id === sourceId ? " on" : ""}`}
+                  style={{ textAlign: "left", cursor: "pointer", border: x.id === sourceId ? "2px solid var(--brand, #5B2EFF)" : undefined }}
+                  onClick={() => (setSourceId(x.id), setPrev(null), setFile(null))}
+                >
+                  <strong>{x.name}</strong>
+                  <div className="small muted">{x.tagline}</div>
+                </button>
+              ))}
+            </div>
+            <p className="small muted" style={{ marginTop: 8 }}>
+              Vem de outro sistema que não está na lista? Use <b>Outra planilha</b> ou nos avise para criarmos a importação dele.
+            </p>
           </div>
+          {source && (
+            <>
+              <h2 style={{ marginBottom: 0 }}>2. Como exportar no {source.name}</h2>
+              <ol className="howto">
+                {source.steps.map((st, i) => (
+                  <li key={i}>{st}</li>
+                ))}
+              </ol>
+              {source.warnings.map((w, i) => (
+                <div className="note warn small" key={i}>
+                  {w}
+                </div>
+              ))}
+            </>
+          )}
+          {source && (
+          <div className="stack">
+          <h2 style={{ marginBottom: 0 }}>3. Bot, canal e arquivo</h2>
           <div className="grid-2">
             <label className="field">
               Bot que vai cobrar
@@ -139,8 +181,8 @@ export function ImportPage() {
             </label>
           </div>
           <label className="field">
-            Planilha (.xlsx ou .csv)
-            <input type="file" accept=".xlsx,.csv" onChange={(e) => (setFile(e.target.files?.[0] ?? null), setPrev(null))} />
+            Arquivo do {source?.name ?? "sistema"} ({source?.fileHint ?? ".xlsx ou .csv"})
+            <input type="file" accept={source?.accept ?? ".xlsx,.csv"} onChange={(e) => (setFile(e.target.files?.[0] ?? null), setPrev(null))} />
           </label>
           {!prev && (
             <div className="row">
@@ -148,6 +190,8 @@ export function ImportPage() {
                 {busy ? "Lendo…" : "Ver prévia"}
               </button>
             </div>
+          )}
+          </div>
           )}
         </div>
       )}
@@ -187,6 +231,7 @@ export function ImportPage() {
               <div className="list-item" key={p.id}>
                 <div className="grow">
                   <span className="title">{p.fileName}</span>
+                  <span className="chip" style={{ marginLeft: 8 }}>{p.source}</span>
                   <div className="small muted">
                     {fmt(p.createdAt)}, @{p.bot} → {p.channel}
                   </div>

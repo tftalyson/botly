@@ -1,0 +1,1 @@
+ALTER TABLE "imports" ADD COLUMN "source" text DEFAULT 'automatizzebot' NOT NULL;

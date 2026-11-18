@@ -15,7 +15,8 @@ import { botToken } from "../bot/runtime.js";
 import type { Transformer } from "grammy";
 import { gatewayClient } from "../payments/gateway.js";
 import { dashboard, funnelPeople, FUNNEL_STEPS, type FunnelStep, type RangeKey } from "./dashboard.js";
-import { analyze, applyImport, readSheet, suggestPlans } from "../domain/importer.js";
+import { analyze, applyImport, suggestPlans } from "../domain/importer.js";
+import { FILE_ERR, IMPORT_SOURCES, sourceById } from "../domain/import-sources.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { agentReply, assume, closeTicket, customerTrail, isSupportOpen, supportHours } from "../domain/support.js";
 import { InlineKeyboard } from "grammy";
@@ -844,6 +845,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
   // ─── Importação de assinantes ───
 
   const importBody = z.object({
+    source: z.string().max(40).optional(), // sistema de origem (padrão: automatizzebot)
     botId: z.string().uuid(),
     channelId: z.string().uuid(),
     fileName: z.string().min(1).max(200),
@@ -857,15 +859,17 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     const channel = await ownChannel(req, b.channelId);
     const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
     const tz = a.settings.timezone ?? DEFAULT_TZ;
+    const source = sourceById(b.source);
+    if (!source) throw new HttpError(400, "Sistema de origem desconhecido.");
     let parsed;
     try {
-      parsed = await readSheet(Buffer.from(b.data, "base64"), b.fileName, tz);
+      parsed = await source.parse(Buffer.from(b.data, "base64"), b.fileName, tz);
     } catch (err) {
-      throw new HttpError(400, err instanceof Error && /coluna|planilha/i.test(err.message) ? err.message : "Não consegui ler o arquivo. Envie a planilha .xlsx exportada (ou um .csv).");
+      throw new HttpError(400, err instanceof Error && /coluna|planilha/i.test(err.message) ? err.message : FILE_ERR);
     }
     const analysis = analyze(parsed.rows, ctx.now());
     analysis.columns = parsed.columns;
-    return { b, bot, channel, analysis };
+    return { b, bot, channel, analysis, source };
   }
 
   app.post("/api/import/preview", { bodyLimit: 20 * 1024 * 1024 }, async (req) => {
@@ -902,7 +906,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
   });
 
   app.post("/api/import/confirm", { bodyLimit: 20 * 1024 * 1024 }, async (req) => {
-    const { b, bot, channel, analysis } = await readImport(req);
+    const { b, bot, channel, analysis, source } = await readImport(req);
     if (b.onlyActive) {
       // Só os ativos: vencidos ficam de fora (não viram clientes no Botly).
       const now = ctx.now();
@@ -910,17 +914,21 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
       analysis.expired = 0;
     }
     if (!analysis.customers.length) throw new HttpError(400, "Nenhum cliente válido para importar.");
-    const r = await applyImport(ctx, { accountId: acc(req), botId: bot.id, channelId: channel.id, analysis, planMap: b.planMap ?? {}, fileName: b.fileName, userId: req.user!.id });
+    const r = await applyImport(ctx, { accountId: acc(req), botId: bot.id, channelId: channel.id, analysis, planMap: b.planMap ?? {}, fileName: b.fileName, source: source.id, userId: req.user!.id });
     // Já monta os lembretes dos importados.
     await planOutbox(ctx, acc(req));
     return r;
   });
 
+  app.get("/api/import/sources", async () =>
+    IMPORT_SOURCES.map((x) => ({ id: x.id, name: x.name, tagline: x.tagline, steps: x.steps, warnings: x.warnings, accept: x.accept, fileHint: x.fileHint })),
+  );
+
   app.get("/api/imports", async (req) => {
     const rows = await db.select().from(s.imports).where(eq(s.imports.accountId, acc(req))).orderBy(desc(s.imports.createdAt)).limit(30);
     const bots = await db.select({ id: s.bots.id, username: s.bots.username }).from(s.bots).where(eq(s.bots.accountId, acc(req)));
     const chans = await db.select({ id: s.channels.id, title: s.channels.title }).from(s.channels).where(eq(s.channels.accountId, acc(req)));
-    return rows.map((r) => ({ id: r.id, fileName: r.fileName, createdAt: r.createdAt, stats: r.stats, bot: bots.find((x) => x.id === r.botId)?.username ?? null, channel: chans.find((x) => x.id === r.channelId)?.title ?? null }));
+    return rows.map((r) => ({ id: r.id, fileName: r.fileName, source: sourceById(r.source)?.name ?? r.source, createdAt: r.createdAt, stats: r.stats, bot: bots.find((x) => x.id === r.botId)?.username ?? null, channel: chans.find((x) => x.id === r.channelId)?.title ?? null }));
   });
 
   // ─── Atendimento ───

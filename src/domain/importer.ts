@@ -293,7 +293,7 @@ export function suggestPlans(groups: PriceGroup[], plans: (typeof s.plans.$infer
  */
 export async function applyImport(
   ctx: Ctx,
-  a: { accountId: string; botId: string; channelId: string; analysis: Analysis; planMap: Record<string, string | null>; fileName: string; userId?: string | null },
+  a: { accountId: string; botId: string; channelId: string; analysis: Analysis; planMap: Record<string, string | null>; fileName: string; source?: string; userId?: string | null },
 ) {
   const now = ctx.now();
   const plans = await ctx.db.select().from(s.plans).where(eq(s.plans.accountId, a.accountId));
@@ -355,7 +355,7 @@ export async function applyImport(
   const stats = { linhas: a.analysis.lines, naoPagas: a.analysis.unpaid, clientes: list.length, ativos: a.analysis.active, vencidos: a.analysis.expired, ignorados: a.analysis.invalid.length, novos: created, atualizados: updated, mantidos: kept };
   const [imp] = await ctx.db
     .insert(s.imports)
-    .values({ accountId: a.accountId, botId: a.botId, channelId: a.channelId, fileName: a.fileName, status: "done", stats, createdBy: a.userId ?? null })
+    .values({ accountId: a.accountId, botId: a.botId, channelId: a.channelId, fileName: a.fileName, source: a.source ?? "automatizzebot", status: "done", stats, createdBy: a.userId ?? null })
     .returning();
   return { id: imp!.id, stats };
 }

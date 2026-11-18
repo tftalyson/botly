@@ -480,6 +480,8 @@ export const imports = pgTable("imports", {
   botId: uuid("bot_id").references(() => bots.id, { onDelete: "set null" }),
   channelId: uuid("channel_id").references(() => channels.id, { onDelete: "set null" }),
   fileName: text("file_name").notNull(),
+  /** Sistema de onde veio (id em domain/import-sources.ts). */
+  source: text("source").notNull().default("automatizzebot"),
   status: text("status", { enum: ["preview", "done", "failed"] }).notNull().default("preview"),
   /** Contagens: linhas, clientes, ativos, vencidos, ignorados... */
   stats: jsonb("stats").$type<Record<string, number>>().notNull().default({}),
