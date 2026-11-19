@@ -8,6 +8,8 @@ export interface Ctx {
   fetch: typeof fetch;
   now: () => Date;
   /** Chamado quando um Pix é pago com valor menor que o cobrado (quem monta o ctx liga isso aos avisos). */
+  /** Chamado quando um segundo Pix do mesmo pedido (já pago) é pago: pagamento em duplicidade. */
+  onDuplicatePaid?: (info: { chargeId: string }) => Promise<void>;
   onUnderpaid?: (info: { chargeId: string; paidCents: number }) => Promise<void>;
   log: { info: (o: unknown, m?: string) => void; warn: (o: unknown, m?: string) => void; error: (o: unknown, m?: string) => void };
 }

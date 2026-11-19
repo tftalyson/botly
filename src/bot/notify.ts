@@ -118,3 +118,53 @@ export async function announceUnderpaid(ctx: Ctx, rt: BotlyRuntime, info: { char
     }
   }
 }
+
+/**
+ * Segundo Pix pago de um pedido que já estava pago (pagamento em duplicidade): o acesso não muda,
+ * mas o dinheiro entrou duas vezes. Registra, abre conversa no Atendimento e avisa o canal.
+ */
+export async function announceDuplicate(ctx: Ctx, rt: BotlyRuntime, info: { chargeId: string }) {
+  const charge = (await ctx.db.select().from(s.charges).where(eq(s.charges.id, info.chargeId)))[0];
+  if (!charge) return;
+  const order = (await ctx.db.select().from(s.orders).where(eq(s.orders.id, charge.orderId)))[0];
+  if (!order?.botId) return;
+  const customer = (await ctx.db.select().from(s.customers).where(eq(s.customers.id, order.customerId)))[0]!;
+  const account = (await ctx.db.select().from(s.accounts).where(eq(s.accounts.id, order.accountId)))[0]!;
+  const bot = (await ctx.db.select().from(s.bots).where(eq(s.bots.id, order.botId)))[0];
+  const itens = order.items.map((i) => i.name).join(" + ");
+
+  await logEvent(ctx, { accountId: order.accountId, botId: order.botId, customerId: customer.id, type: "duplicate_paid", meta: { chargeId: charge.id, orderId: order.id, amountCents: charge.amountCents } });
+
+  const { ticket } = await openTicket(ctx, { accountId: order.accountId, customerId: customer.id, botId: order.botId, topic: "pagamento em duplicidade" });
+  await addMessage(ctx, ticket, {
+    sender: "system",
+    text: `Pagamento em duplicidade: o pedido (${itens}) já estava pago e o cliente pagou outro Pix de ${brl(charge.amountCents)} (${charge.provider}). O acesso continua normal. Decida: devolver o valor ou dar dias extras.`,
+  });
+
+  try {
+    const api = await rt.api(order.botId);
+    const aberto = isSupportOpen(account.settings, ctx.now());
+    await api.sendMessage(
+      customer.telegramUserId,
+      `⚠️ <b>Recebemos dois pagamentos do mesmo pedido.</b>\n\nSeu acesso está normal. O segundo Pix (<b>${brl(charge.amountCents)}</b>) foi pago a mais. Já abrimos um atendimento para resolver com você: ${aberto ? "um atendente vai te responder aqui nesta conversa." : esc(offHoursText(account.settings))}`,
+      { parse_mode: "HTML" },
+    );
+  } catch (err) {
+    ctx.log.warn({ chargeId: charge.id, err: String(err) }, "falha ao avisar o cliente do pagamento em duplicidade");
+  }
+
+  const notifyChat = account.settings.notifyChatId;
+  if (notifyChat) {
+    try {
+      const who = customer.username ? `@${customer.username}` : `${customer.firstName ?? ""} (${customer.telegramUserId})`;
+      const api = await rt.api(account.settings.notifyBotId || order.botId);
+      await api.sendMessage(
+        notifyChat,
+        `⚠️ <b>Pagamento em duplicidade</b>\nCliente: ${esc(who)}\nPedido: ${esc(itens)} — já estava pago; entrou mais <b>${brl(charge.amountCents)}</b>\nBot: @${esc(bot?.username ?? "?")} · ${charge.provider}\nAtendimento aberto em painel.botlybrasil.tech/atendimento`,
+        { parse_mode: "HTML" },
+      );
+    } catch (err) {
+      ctx.log.warn({ chargeId: charge.id, err: String(err) }, "falha ao avisar o canal sobre pagamento em duplicidade");
+    }
+  }
+}

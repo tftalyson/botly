@@ -14,7 +14,7 @@ import { encryptJson } from "../src/lib/crypto.js";
 import { silentLog } from "../src/lib/log.js";
 import { addDuration, extendExpiry, startOfDay } from "../src/lib/time.js";
 import { createRuntime } from "../src/bot/runtime.js";
-import { announceUnderpaid } from "../src/bot/notify.js";
+import { announceDuplicate, announceUnderpaid } from "../src/bot/notify.js";
 import { checkCharge } from "../src/domain/sales.js";
 import { apiForToken } from "../src/bot/api.js";
 import { buildApi } from "../src/api/server.js";
@@ -75,6 +75,7 @@ const fakeFetch = (async (input: any, init?: any) => {
 const ctx: Ctx = { db, appSecret: SECRET, publicUrl: "https://api.teste", fetch: fakeFetch, now: () => now, log: silentLog };
 const rt = createRuntime(ctx, { transformer: tg });
 ctx.onUnderpaid = (info) => announceUnderpaid(ctx, rt, info);
+ctx.onDuplicatePaid = (info) => announceDuplicate(ctx, rt, info);
 let upd = 0;
 const user = { id: USER, is_bot: false, first_name: "João", username: "joao" };
 const msg = (text: string) => ({ update_id: ++upd, message: { message_id: upd, date: 0, chat: { id: USER, type: "private" }, from: user, text, entities: text.startsWith("/") ? [{ type: "bot_command", offset: 0, length: text.split(" ")[0]!.length }] : undefined } });
@@ -362,5 +363,27 @@ describe("valor diferente do pedido", () => {
     expect(det.trail.events.some((e: any) => e.type === "underpaid" && e.label.includes("valor diferente"))).toBe(true);
     expect(det.trail.stoppedAt).toBeNull(); // este cliente já tinha passado por todas as etapas
     await app.close();
+  });
+
+  it("pagamento em duplicidade: acesso não muda, mas avisa cliente, abre atendimento e avisa o canal", async () => {
+    const order = (await db.select().from(s.orders).where(eq(s.orders.status, "pending")).orderBy(desc(s.orders.createdAt)))[0]!;
+    const ch1 = (await db.select().from(s.charges).where(eq(s.charges.orderId, order.id)))[0]!;
+    pixValue.delete(ch1.providerTxId!); // agora o gateway diz que o valor foi o certo
+    const paid = await checkCharge(ctx, ch1.id);
+    expect(paid && paid !== "pending").toBeTruthy();
+    // Segundo Pix do mesmo pedido, também pago.
+    const [ch2] = await db.insert(s.charges).values({ accountId: order.accountId, orderId: order.id, gatewayId: ch1.gatewayId, provider: ch1.provider, providerTxId: "tx-duplo", amountCents: 1000 }).returning();
+    pixPaid.add("tx-duplo");
+    calls.length = 0;
+    expect(await checkCharge(ctx, ch2!.id)).toBeNull();
+    const msgs = sent("sendMessage");
+    expect(msgs.filter((m) => m.payload.chat_id === USER && String(m.payload.text).includes("dois pagamentos")).length).toBe(1);
+    expect(msgs.filter((m) => m.payload.chat_id === -555 && String(m.payload.text).includes("Pagamento em duplicidade")).length).toBe(1);
+    // A conversa já aberta no teste anterior é reaproveitada; a nota do sistema entra nela.
+    const notes = await db.select().from(s.supportMessages).where(eq(s.supportMessages.sender, "system"));
+    expect(notes.some((m) => String(m.text).includes("Pagamento em duplicidade"))).toBe(true);
+    expect((await db.select().from(s.events).where(eq(s.events.type, "duplicate_paid"))).length).toBe(1);
+    expect(await checkCharge(ctx, ch2!.id)).toBeNull(); // repetir a conferência não avisa de novo
+    expect(sent("sendMessage").filter((m) => String(m.payload.text).includes("dois pagamentos")).length).toBe(1);
   });
 });

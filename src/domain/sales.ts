@@ -105,7 +105,8 @@ export interface PaidResult {
  */
 export async function markChargePaid(ctx: Ctx, chargeId: string, raw?: unknown): Promise<PaidResult | null> {
   const now = ctx.now();
-  return ctx.db.transaction(async (tx) => {
+  let duplicate = false;
+  const result = await ctx.db.transaction(async (tx) => {
     const [charge] = await tx
       .update(s.charges)
       .set({ status: "paid", paidAt: now, ...(raw !== undefined ? { raw } : {}) })
@@ -118,7 +119,10 @@ export async function markChargePaid(ctx: Ctx, chargeId: string, raw?: unknown):
       .where(and(eq(s.orders.id, charge.orderId), sql`${s.orders.status} <> 'paid'`))
       .returning();
     // Pedido já pago por outra cobrança (cliente pagou dois Pix): fica registrado, sem liberar de novo.
-    if (!order) return null;
+    if (!order) {
+      duplicate = true;
+      return null;
+    }
 
     const accesses: Access[] = [];
     // O plano principal vem antes, para o extra "alinhar" no vencimento novo dele.
@@ -187,6 +191,14 @@ export async function markChargePaid(ctx: Ctx, chargeId: string, raw?: unknown):
     }
     return { order, charge, accesses };
   });
+  if (duplicate && ctx.onDuplicatePaid) {
+    try {
+      await ctx.onDuplicatePaid({ chargeId });
+    } catch (err) {
+      ctx.log.warn({ chargeId, err: String(err) }, "falha ao avisar pagamento em duplicidade");
+    }
+  }
+  return result;
 }
 
 /** Confere uma cobrança no gateway e, se paga, confirma. */
