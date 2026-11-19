@@ -400,6 +400,17 @@ function OffersTab({ draft, setDraft, channels, plans, reload }: TabProps & { ch
   const ps = draft.upsell.postSale ?? { enabled: false, discountPct: 20, validMinutes: 30 };
   const setPs = (v: typeof ps) => setDraft({ ...draft, upsell: { ...draft.upsell, postSale: v } });
   const setOb = (v: typeof ob) => setDraft({ ...draft, upsell: { ...draft.upsell, orderBump: v } });
+  // canais ligados na ordem da fila, depois os desligados
+  const onIds = ob.channelIds.filter((id) => extras.some((c) => c.id === id));
+  const orderedExtras = [...onIds.map((id) => extras.find((c) => c.id === id)!), ...extras.filter((c) => !onIds.includes(c.id))];
+  const move = (id: string, dir: -1 | 1) => {
+    const ids = [...onIds];
+    const i = ids.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j]!, ids[i]!];
+    setOb({ ...ob, channelIds: [...ids, ...ob.channelIds.filter((x) => !ids.includes(x))] });
+  };
   return (
     <div className="panel stack">
       <div>
@@ -415,12 +426,28 @@ function OffersTab({ draft, setDraft, channels, plans, reload }: TabProps & { ch
       {ob.enabled &&
         (extras.length ? (
           <div className="stack">
-            <p className="small muted">Marque os canais na ordem de preferência. O primeiro que o cliente ainda não tem é o oferecido.</p>
-            {extras.map((c) => {
+            <p className="small muted">Marque os canais e use as setas para definir a ordem. O primeiro da fila que o cliente ainda não tem (e não recusou) é o oferecido.</p>
+            {orderedExtras.map((c) => {
               const on = ob.channelIds.includes(c.id);
+              const pos = onIds.indexOf(c.id);
               const price = ob.priceOverrides?.[c.id] ?? null;
               return (
                 <div key={c.id} className="row" style={{ alignItems: "center" }}>
+                  {on ? (
+                    <span className="row" style={{ gap: 4, alignItems: "center" }}>
+                      <b title={pos === 0 ? "Este é oferecido primeiro" : `${pos + 1}º da fila`} style={{ minWidth: 28 }}>
+                        {pos + 1}º
+                      </b>
+                      <button className="btn" type="button" disabled={pos === 0} aria-label={`Subir ${c.title}`} onClick={() => move(c.id, -1)}>
+                        ↑
+                      </button>
+                      <button className="btn" type="button" disabled={pos === onIds.length - 1} aria-label={`Descer ${c.title}`} onClick={() => move(c.id, 1)}>
+                        ↓
+                      </button>
+                    </span>
+                  ) : (
+                    <span style={{ minWidth: 28 + 8 }} />
+                  )}
                   <Toggle checked={on} onChange={(v) => setOb({ ...ob, channelIds: v ? [...ob.channelIds, c.id] : ob.channelIds.filter((x) => x !== c.id) })}>
                     {c.title}
                   </Toggle>
