@@ -286,6 +286,8 @@ export const customerBots = pgTable(
     /** false quando a pessoa bloqueou o bot (o envio falha com 403). */
     canMessage: boolean("can_message").notNull().default(true),
     source: text("source"),
+    /** Última mensagem de planos/pacotes que o bot mandou: ao mandar uma nova, a anterior é apagada (preços podem ter mudado). */
+    catalogMsgId: integer("catalog_msg_id"),
   },
   (t) => [primaryKey({ columns: [t.customerId, t.botId] }), index("customer_bots_bot").on(t.botId)],
 );

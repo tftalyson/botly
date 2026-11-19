@@ -75,17 +75,35 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
    * Mostra uma tela. Por padrão manda uma mensagem NOVA (a conversa guarda o histórico).
    * replace = edita a mensagem do botão: só ao trocar de plano/pacote no menu de compra.
    */
-  async function show(c: Context, text: string, kb?: InlineKeyboard, opts: { replace?: boolean } = {}) {
+  async function show(c: Context, text: string, kb?: InlineKeyboard, opts: { replace?: boolean } = {}): Promise<number | undefined> {
     const o = { parse_mode: "HTML" as const, reply_markup: kb, link_preview_options: { is_disabled: true } };
     if (opts.replace && c.callbackQuery?.message && "text" in c.callbackQuery.message) {
       try {
         await c.editMessageText(text, o);
-        return;
+        return c.callbackQuery.message.message_id;
       } catch {
         /* mensagem antiga ou com mídia: manda nova */
       }
     }
-    await c.reply(text, o);
+    return (await c.reply(text, o)).message_id;
+  }
+
+  /**
+   * Guarda qual é a mensagem de planos/pacotes mais recente deste cliente e apaga a anterior:
+   * os planos e preços podem mudar, e uma lista velha com botões vira armadilha.
+   */
+  async function trackCatalog(c: Context, customerId: string, newId: number | undefined) {
+    if (!newId) return;
+    const where = and(eq(s.customerBots.customerId, customerId), eq(s.customerBots.botId, botId));
+    const old = (await ctx.db.select({ m: s.customerBots.catalogMsgId }).from(s.customerBots).where(where))[0]?.m;
+    await ctx.db.update(s.customerBots).set({ catalogMsgId: newId }).where(where);
+    if (old && old !== newId && c.chat) {
+      try {
+        await c.api.deleteMessage(c.chat.id, old);
+      } catch {
+        /* já apagada ou antiga demais (48 h): tudo bem */
+      }
+    }
   }
 
   // ───────────── Trava de compra ─────────────
@@ -211,7 +229,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const kb = new InlineKeyboard();
     for (const p of L.plans) kb.text(`${p.highlight ? "⭐ " : ""}${p.name} — ${brl(p.priceCents)}`, `p:${p.id}`).row();
     if (L.bot.showBundles && (await activeBundles(L.account.id)).length) kb.text("🔥 Pacotes promocionais", "bundles").row();
-    await show(c, "💎 <b>Escolha seu plano:</b>", kb, { replace });
+    await trackCatalog(c, customer.id, await show(c, "💎 <b>Escolha seu plano:</b>", kb, { replace }));
   }
 
   async function activeBundles(accountId: string) {
@@ -246,7 +264,8 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       kb.text(`${b.name} (${n} canais, ${durationLabel(b.durationUnit, b.durationValue)}) — ${brl(b.priceCents)}`, `bun:${b.id}`).row();
     }
     kb.text("⬅️ Voltar", "plans:back");
-    await show(c, "🔥 <b>Pacotes</b> — vários canais por um preço só:", kb, { replace: true });
+    const { customer } = await who(c, L);
+    await trackCatalog(c, customer.id, await show(c, "🔥 <b>Pacotes</b> — vários canais por um preço só:", kb, { replace: true }));
   });
 
   // ───────────── Escolha → order bump → Pix ─────────────

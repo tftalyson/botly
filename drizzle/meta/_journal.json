@@ -50,6 +50,13 @@
       "when": 1795121868665,
       "tag": "0006_transmissoes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795128532723,
+      "tag": "0007_apagar_planos_antigos",
+      "breakpoints": true
     }
   ]
 }

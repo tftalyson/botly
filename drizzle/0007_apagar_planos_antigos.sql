@@ -1,0 +1,1 @@
+ALTER TABLE "customer_bots" ADD COLUMN "catalog_msg_id" integer;

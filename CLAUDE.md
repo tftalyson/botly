@@ -47,6 +47,7 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 
 ## O que já existe
 - `src/bot/handlers.ts`: conversa completa (maioridade, boas-vindas com mídia/prévias, planos, pacotes, order bump, Pix com QR + copia e cola, Já paguei, Gerar outro Pix em outro gateway, /meuplano, pedido de entrada aprovado só pelo bot gestor, bot promovido a admin → canal cadastrado sozinho).
+- Lista de planos/pacotes: `trackCatalog` (handlers.ts) guarda em `customer_bots.catalog_msg_id` a última mensagem de planos ou pacotes enviada ao cliente e APAGA a anterior (planos e preços podem mudar; apagar falha em silêncio se já sumiu ou passou de 48 h). Trocar entre planos e pacotes edita a mesma mensagem. Teste: `test/catalog.test.ts`.
 - `src/domain/sales.ts`: pedido, Pix com reserva de gateway, `markChargePaid` (não duplica; extra vence junto com o plano; renovação soma).
 - `src/api/server.ts`: `/tg/:botId` (confere o segredo do Telegram) e `/pay/:provider/:gatewayId?token=` (sempre confere na API do gateway).
 - `src/jobs/ticks.ts`: conferência de Pix pendentes a cada minuto (PushinPay a cada 5 min por cobrança), por 24 h.
