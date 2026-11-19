@@ -1,5 +1,5 @@
 // Transmissões (mailing): escolhe o público, agenda e envia pelo bot em ritmo seguro.
-import { InlineKeyboard, InputFile } from "grammy";
+import { type Api, InlineKeyboard, InputFile } from "grammy";
 import { and, eq, inArray, lt, lte, sql } from "drizzle-orm";
 import * as s from "../db/schema.js";
 import type { BotlyRuntime } from "../bot/runtime.js";
@@ -81,51 +81,58 @@ async function startDue(ctx: Ctx) {
 type Bc = typeof s.broadcasts.$inferSelect;
 const fileIds = new Map<string, string>();
 
-function keyboard(b: Bc): InlineKeyboard | undefined {
-  const btn = b.content.button;
+function keyboard(content: Bc["content"], broadcastId: string): InlineKeyboard | undefined {
+  const btn = content.button;
   if (!btn || btn.kind === "none") return undefined;
   const kb = new InlineKeyboard();
   if (btn.kind === "plans") kb.text(btn.label || "💎 Ver planos", "plans");
   else if (btn.kind === "url" && btn.url) kb.url(btn.label || "Abrir", btn.url);
-  else if (btn.kind === "offer" && btn.planId) kb.text(btn.label || "🎁 Quero a oferta", `bo:${b.id}`);
+  else if (btn.kind === "offer") kb.text(btn.label || "🎁 Quero a oferta", `bo:${broadcastId}`);
   else return undefined;
   return kb;
 }
 
+/** Manda o conteúdo para uma pessoa (usado no envio de verdade e no teste). Lança o erro do Telegram. */
+export async function deliver(ctx: Ctx, api: Api, botId: string, chatId: number, content: Bc["content"], nome: string, broadcastId: string) {
+  const text = fillTemplate(content.text, { nome: esc(nome) });
+  const kb = keyboard(content, broadcastId);
+  const m = content.media;
+  if (m && (m.mediaId || m.url)) {
+    const key = `${botId}:${m.mediaId ?? m.url}`;
+    let src: string | InputFile | undefined = fileIds.get(key) ?? m.url ?? undefined;
+    let up = false;
+    if (!src && m.mediaId) {
+      const row = (await ctx.db.select().from(s.media).where(eq(s.media.id, m.mediaId)))[0];
+      if (row) {
+        src = new InputFile(row.data, row.fileName);
+        up = true;
+      }
+    }
+    if (src) {
+      const opts = { caption: text, parse_mode: "HTML" as const, reply_markup: kb };
+      const sent = m.type === "video" ? await api.sendVideo(chatId, src, opts) : m.type === "animation" ? await api.sendAnimation(chatId, src, opts) : await api.sendPhoto(chatId, src, opts);
+      if (up) {
+        const fid = "video" in sent && sent.video ? sent.video.file_id : "animation" in sent && sent.animation ? sent.animation.file_id : "photo" in sent && sent.photo ? sent.photo.at(-1)?.file_id : null;
+        if (fid) fileIds.set(key, fid);
+      }
+      return;
+    }
+  }
+  await api.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup: kb });
+}
+
+/** Erro do Telegram que significa "essa pessoa não recebe mais". */
+export const isBlockedError = (msg: string) => /403|blocked|deactivated|chat not found|user is deactivated/i.test(msg);
+
 async function sendOne(ctx: Ctx, rt: BotlyRuntime, b: Bc, r: { id: string; customerId: string; botId: string }): Promise<"sent" | "blocked" | "retry" | "failed"> {
   const c = (await ctx.db.select().from(s.customers).where(eq(s.customers.id, r.customerId)))[0];
   if (!c) return "failed";
-  const text = fillTemplate(b.content.text, { nome: esc(c.firstName || c.username || "") });
-  const kb = keyboard(b);
-  const m = b.content.media;
   try {
-    const api = await rt.api(r.botId);
-    if (m && (m.mediaId || m.url)) {
-      const key = `${r.botId}:${m.mediaId ?? m.url}`;
-      let src: string | InputFile | undefined = fileIds.get(key) ?? m.url ?? undefined;
-      let up = false;
-      if (!src && m.mediaId) {
-        const row = (await ctx.db.select().from(s.media).where(eq(s.media.id, m.mediaId)))[0];
-        if (row) {
-          src = new InputFile(row.data, row.fileName);
-          up = true;
-        }
-      }
-      if (src) {
-        const opts = { caption: text, parse_mode: "HTML" as const, reply_markup: kb };
-        const sent = m.type === "video" ? await api.sendVideo(c.telegramUserId, src, opts) : m.type === "animation" ? await api.sendAnimation(c.telegramUserId, src, opts) : await api.sendPhoto(c.telegramUserId, src, opts);
-        if (up) {
-          const fid = "video" in sent && sent.video ? sent.video.file_id : "animation" in sent && sent.animation ? sent.animation.file_id : "photo" in sent && sent.photo ? sent.photo.at(-1)?.file_id : null;
-          if (fid) fileIds.set(key, fid);
-        }
-        return "sent";
-      }
-    }
-    await api.sendMessage(c.telegramUserId, text, { parse_mode: "HTML", reply_markup: kb });
+    await deliver(ctx, await rt.api(r.botId), r.botId, c.telegramUserId, b.content, c.firstName || c.username || "", b.id);
     return "sent";
   } catch (err) {
     const msg = String(err);
-    if (/403|blocked|deactivated|chat not found|user is deactivated/i.test(msg)) {
+    if (isBlockedError(msg)) {
       await ctx.db.update(s.customerBots).set({ canMessage: false }).where(and(eq(s.customerBots.customerId, r.customerId), eq(s.customerBots.botId, r.botId)));
       return "blocked";
     }

@@ -167,6 +167,32 @@ function Compose({ bots, channels, onClose, onDone }: { bots: BotListItem[]; cha
     btn.kind === "offer" && !btn.planId ? "Escolha o plano da oferta." :
     later && !at ? "Escolha o dia e a hora." : null;
 
+  const contentBody = () => ({
+    text,
+    media: media ? { type: media.type, mediaId: media.mediaId ?? null, url: media.mediaId ? null : (media.url ?? null) } : null,
+    button:
+      btn.kind === "none"
+        ? null
+        : { kind: btn.kind, label: btn.label || undefined, url: btn.kind === "url" ? btn.url : undefined, planId: btn.kind === "offer" ? btn.planId : undefined, discountPct: btn.kind === "offer" ? btn.discountPct : undefined, validMinutes: btn.kind === "offer" ? btn.validMinutes : undefined },
+  });
+  const [testId, setTestId] = useState(() => {
+    try {
+      return localStorage.getItem("botly.testId") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const sendTest = () =>
+    run(async () => {
+      try {
+        localStorage.setItem("botly.testId", testId);
+      } catch {
+        /* sem armazenamento: tudo bem */
+      }
+      await post("/api/broadcasts/test", { botId: botIds[0], telegramUserId: Number(testId), content: contentBody() });
+    }, "Teste enviado. Olhe o seu Telegram.");
+  const testProblem = !botIds.length ? "Escolha um bot." : !text.trim() ? "Escreva a mensagem." : !/^\d{5,}$/.test(testId.trim()) ? "Coloque o seu ID do Telegram (só números)." : null;
+
   const send = () => {
     const n = count ?? 0;
     const quando = later ? `em ${new Date(at).toLocaleString("pt-BR")}` : "agora";
@@ -176,14 +202,7 @@ function Compose({ bots, channels, onClose, onDone }: { bots: BotListItem[]; cha
         name: name || undefined,
         botIds,
         audience: cleanAud(aud),
-        content: {
-          text,
-          media: media ? { type: media.type, mediaId: media.mediaId ?? null, url: media.mediaId ? null : (media.url ?? null) } : null,
-          button:
-            btn.kind === "none"
-              ? null
-              : { kind: btn.kind, label: btn.label || undefined, url: btn.kind === "url" ? btn.url : undefined, planId: btn.kind === "offer" ? btn.planId : undefined, discountPct: btn.kind === "offer" ? btn.discountPct : undefined, validMinutes: btn.kind === "offer" ? btn.validMinutes : undefined },
-        },
+        content: contentBody(),
         scheduledAt: later ? new Date(at).toISOString() : null,
       });
       onDone();
@@ -320,6 +339,18 @@ function Compose({ bots, channels, onClose, onDone }: { bots: BotListItem[]; cha
           ) : (
             <div className="note warn small">Para usar a oferta com desconto, deixe marcado só um bot.</div>
           ))}
+        <div className="field">
+          Testar antes (só para você)
+          <div className="row">
+            <input type="text" inputMode="numeric" placeholder="Seu ID do Telegram" value={testId} onChange={(e) => setTestId(e.target.value.replace(/\D/g, ""))} style={{ maxWidth: 220 }} />
+            <button className="btn" disabled={busy || !!testProblem} onClick={sendTest} title={testProblem ?? ""}>
+              Enviar teste
+            </button>
+          </div>
+          <small>
+            Vai pelo primeiro bot marcado, só para esse Telegram. Você precisa ter dado /start nesse bot. Não sabe seu ID? Mande /start para @userinfobot no Telegram. O botão da oferta só vale na transmissão de verdade.
+          </small>
+        </div>
         <hr style={{ border: 0, borderTop: "1px solid var(--line-2)", width: "100%" }} />
         <div className="field">
           Quando enviar

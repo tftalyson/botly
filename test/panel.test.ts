@@ -147,5 +147,10 @@ describe("painel", () => {
     expect((await call("POST", `/api/broadcasts/${ok.body.id}/cancel`)).status).toBe(200);
     expect((await call("POST", `/api/broadcasts/${ok.body.id}/cancel`)).status).toBe(404);
     expect((await call("GET", `/api/broadcasts/${ok.body.id}`)).body.status).toBe("canceled");
+    // teste só para o próprio Telegram
+    const test = await call("POST", "/api/broadcasts/test", { botId, telegramUserId: 123456789, content: { text: "Oi {nome}", button: { kind: "plans" } } });
+    expect(test.status).toBe(200);
+    expect((await call("POST", "/api/broadcasts/test", { botId, telegramUserId: 123456789, content: { text: "" } })).status).toBe(400);
+    expect((await call("POST", "/api/broadcasts/test", { botId: "6b9c2d4e-0000-4000-8000-000000000000", telegramUserId: 123456789, content: { text: "Oi" } })).status).toBe(400);
   });
 });

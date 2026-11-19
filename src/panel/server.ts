@@ -17,7 +17,7 @@ import { gatewayClient } from "../payments/gateway.js";
 import { dashboard, funnelPeople, FUNNEL_STEPS, type FunnelStep, type RangeKey } from "./dashboard.js";
 import { analyze, applyImport, suggestPlans } from "../domain/importer.js";
 import { FILE_ERR, IMPORT_SOURCES, sourceById } from "../domain/import-sources.js";
-import { audienceRows, broadcastStats } from "../domain/broadcast.js";
+import { audienceRows, broadcastStats, deliver, isBlockedError } from "../domain/broadcast.js";
 import { ensureRecoveryTemplates } from "../domain/recovery.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { agentReply, assume, closeTicket, customerTrail, isSupportOpen, supportHours } from "../domain/support.js";
@@ -665,6 +665,21 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     if (p.botIds.length) await myBots(req, p.botIds);
     const rows = await audienceRows(ctx, acc(req), p.botIds, p.audience);
     return { count: rows.length };
+  });
+
+  // Teste: manda a mensagem só para o Telegram de quem está no painel (precisa ter dado /start no bot).
+  app.post("/api/broadcasts/test", async (req) => {
+    const p = z.object({ botId: z.string().uuid(), telegramUserId: z.number().int().positive(), content: broadcastBody.shape.content }).parse(req.body);
+    const [bot] = await myBots(req, [p.botId]);
+    if (p.content.button?.kind === "url" && !p.content.button.url) throw new HttpError(400, "Informe o link do botão.");
+    try {
+      await deliver(ctx, tgApi(bot!), bot!.id, p.telegramUserId, p.content, "Você", "teste");
+    } catch (err) {
+      const msg = String(err);
+      if (isBlockedError(msg)) throw new HttpError(400, "O Telegram não deixou enviar. Abra o bot e toque em /start primeiro, e confira se o ID está certo.");
+      throw new HttpError(400, "Não consegui enviar o teste: " + msg.slice(0, 160));
+    }
+    return { ok: true };
   });
 
   app.get("/api/broadcasts", async (req) => {

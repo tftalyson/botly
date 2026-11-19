@@ -582,6 +582,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
   // ───────────── Oferta de uma transmissão ─────────────
   // bo:<transmissão>. O plano, o desconto e o prazo vêm da transmissão (não do botão); o prazo conta da hora do envio.
   bot.callbackQuery(/^bo:(.+)$/, async (c) => {
+    if (c.match[1] === "test") return void (await c.answerCallbackQuery({ text: "Isto é um teste: na transmissão de verdade este botão abre a oferta com desconto.", show_alert: true }));
     await c.answerCallbackQuery();
     const L = await load();
     const { customer } = await who(c, L);
