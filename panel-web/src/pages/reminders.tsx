@@ -4,8 +4,9 @@ import { Loading, Toggle, useAction, useLoad } from "../ui";
 
 interface Tpl {
   id: string;
-  kind: "reminder" | "winback";
+  kind: "reminder" | "winback" | "recovery";
   days: number;
+  minutes: number;
   text: string;
   discountPct: number;
   enabled: boolean;
@@ -19,6 +20,8 @@ interface Data {
 }
 
 const VARS = "{nome} {canal} {vencimento} {dias} {valor} {desconto}";
+const RECOVERY_VARS = "{nome} {plano} {valor} {desconto}";
+const minutesLabel = (m: number) => (m >= 60 && m % 60 === 0 ? `${m / 60} h` : `${m} min`);
 
 export function RemindersPage() {
   const d = useLoad(() => get<Data>("/api/templates"));
@@ -26,6 +29,7 @@ export function RemindersPage() {
   if (!d.data) return <Loading error={d.error} />;
   const reminders = d.data.templates.filter((t) => t.kind === "reminder");
   const winbacks = d.data.templates.filter((t) => t.kind === "winback");
+  const recoveries = d.data.templates.filter((t) => t.kind === "recovery").sort((a, b) => a.minutes - b.minutes);
   return (
     <>
       <div className="page-head">
@@ -35,6 +39,26 @@ export function RemindersPage() {
         </div>
       </div>
       <Timing data={d.data} reload={d.reload} />
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Pix gerado e não pago</h2>
+            <p>
+              Para quem gerou o Pix e não pagou. O tempo conta a partir da geração do Pix. A <b>última</b> mensagem oferece o plano mais barato escolhido na aba Ofertas de cada bot. Ligue por bot em
+              Bots → Ofertas → “Recuperar Pix não pago”.
+            </p>
+          </div>
+          <button className="btn" onClick={() => setAdding("recovery")}>
+            Nova mensagem
+          </button>
+        </div>
+        <div className="stack">
+          {adding === "recovery" && <TplForm kind="recovery" onDone={() => (setAdding(null), d.reload())} onCancel={() => setAdding(null)} />}
+          {recoveries.map((t) => (
+            <TplForm key={t.id} tpl={t} kind={t.kind} onDone={d.reload} />
+          ))}
+        </div>
+      </div>
       <div className="panel">
         <div className="panel-head">
           <div>
@@ -110,6 +134,7 @@ function Timing({ data, reload }: { data: Data; reload: () => void }) {
 function TplForm({ tpl, kind, onDone, onCancel }: { tpl?: Tpl; kind: Tpl["kind"]; onDone: () => void; onCancel?: () => void }) {
   const [f, setF] = useState({
     days: tpl ? Math.abs(tpl.days) : kind === "reminder" ? 2 : 3,
+    minutes: tpl?.minutes ?? 30,
     text: tpl?.text ?? "",
     discountPct: tpl?.discountPct ?? 0,
     enabled: tpl?.enabled ?? true,
@@ -117,16 +142,24 @@ function TplForm({ tpl, kind, onDone, onCancel }: { tpl?: Tpl; kind: Tpl["kind"]
   });
   const { busy, run } = useAction();
   const signedDays = kind === "reminder" ? -f.days : f.days;
-  const dirty = !tpl || signedDays !== tpl.days || f.text !== tpl.text || f.discountPct !== tpl.discountPct || f.mediaUrl !== (tpl.mediaUrl ?? "");
-  const body = { kind, days: signedDays, text: f.text, discountPct: f.discountPct, mediaUrl: f.mediaUrl || null };
+  const dirty = !tpl || (kind === "recovery" ? f.minutes !== tpl.minutes : signedDays !== tpl.days) || f.text !== tpl.text || f.discountPct !== tpl.discountPct || f.mediaUrl !== (tpl.mediaUrl ?? "");
+  const body = { kind, ...(kind === "recovery" ? { minutes: f.minutes } : { days: signedDays }), text: f.text, discountPct: f.discountPct, mediaUrl: f.mediaUrl || null };
   return (
     <div style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }} className="stack">
       <div className="row">
-        <label className="field" style={{ width: 150 }}>
-          {kind === "reminder" ? "Dias antes" : "Dias depois"}
-          <input type="number" min={kind === "reminder" ? 0 : 1} max={60} value={f.days} onChange={(e) => setF({ ...f, days: Math.max(kind === "reminder" ? 0 : 1, Number(e.target.value) || 0) })} />
-        </label>
-        {kind === "winback" && (
+        {kind === "recovery" ? (
+          <label className="field" style={{ width: 190 }}>
+            Minutos depois do Pix
+            <small>{minutesLabel(f.minutes)} depois de gerar o Pix</small>
+            <input type="number" min={5} max={2880} value={f.minutes} onChange={(e) => setF({ ...f, minutes: Math.min(2880, Math.max(5, Number(e.target.value) || 5)) })} />
+          </label>
+        ) : (
+          <label className="field" style={{ width: 150 }}>
+            {kind === "reminder" ? "Dias antes" : "Dias depois"}
+            <input type="number" min={kind === "reminder" ? 0 : 1} max={60} value={f.days} onChange={(e) => setF({ ...f, days: Math.max(kind === "reminder" ? 0 : 1, Number(e.target.value) || 0) })} />
+          </label>
+        )}
+        {(kind === "winback" || kind === "recovery") && (
           <label className="field" style={{ width: 150 }}>
             Desconto (%)
             <input type="number" min={0} max={90} value={f.discountPct} onChange={(e) => setF({ ...f, discountPct: Math.min(90, Math.max(0, Number(e.target.value) || 0)) })} />
@@ -142,7 +175,7 @@ function TplForm({ tpl, kind, onDone, onCancel }: { tpl?: Tpl; kind: Tpl["kind"]
       <label className="field">
         Texto
         <small>
-          Pode usar: <code>{VARS}</code>. {kind === "reminder" && f.days === 0 ? "Esta sai no dia do vencimento." : ""}
+          Pode usar: <code>{kind === "recovery" ? RECOVERY_VARS : VARS}</code>. {kind === "reminder" && f.days === 0 ? "Esta sai no dia do vencimento." : ""}
         </small>
         <textarea value={f.text} maxLength={1024} onChange={(e) => setF({ ...f, text: e.target.value })} style={{ minHeight: 90 }} />
       </label>

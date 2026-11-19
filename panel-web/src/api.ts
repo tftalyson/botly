@@ -138,6 +138,7 @@ export interface BotDetail {
     orderBump?: { enabled: boolean; channelIds: string[]; priceOverrides?: Record<string, number> };
     renewal?: { enabled: boolean; extraChannelId?: string | null; longPlanId?: string | null };
   };
+  recovery?: { enabled?: boolean; downsellPlanId?: string | null };
   showBundles: boolean;
 }
 export interface Channel {

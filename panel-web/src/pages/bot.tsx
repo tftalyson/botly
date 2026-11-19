@@ -486,10 +486,37 @@ function OffersTab({ draft, setDraft, channels, plans, reload }: TabProps & { ch
         </div>
       )}
       <hr style={{ border: 0, borderTop: "1px solid var(--line-2)", width: "100%" }} />
+      <div>
+        <h2>Recuperar Pix não pago</h2>
+        <p className="muted small">
+          Quem gerou o Pix e não pagou recebe mensagens automáticas (por padrão: 15 minutos depois, 2 horas depois com desconto e 24 horas depois com o plano mais barato). Os textos, os tempos e o desconto
+          ficam em <Link to="/lembretes">Lembretes</Link>.
+        </p>
+      </div>
+      <Toggle checked={!!draft.recovery?.enabled} onChange={(v) => setDraft({ ...draft, recovery: { ...draft.recovery, enabled: v } })}>
+        Recuperar Pix não pago
+      </Toggle>
+      {draft.recovery?.enabled && (
+        <label className="field">
+          Plano mais barato da última mensagem
+          <select value={draft.recovery.downsellPlanId ?? ""} onChange={(e) => setDraft({ ...draft, recovery: { ...draft.recovery, downsellPlanId: e.target.value || null } })}>
+            <option value="">Não oferecer (repete o mesmo plano)</option>
+            {plans
+              .filter((p) => p.active)
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} — {brl(p.priceCents)}
+                </option>
+              ))}
+          </select>
+          <small>Só é oferecido para quem tentou comprar algo mais caro que este plano.</small>
+        </label>
+      )}
+      <hr style={{ border: 0, borderTop: "1px solid var(--line-2)", width: "100%" }} />
       <Toggle checked={draft.showBundles} onChange={(v) => setDraft({ ...draft, showBundles: v })}>
         Mostrar o botão “Pacotes promocionais” na lista de planos
       </Toggle>
-      <SaveBar busy={busy} onSave={() => run(() => put(`/api/bots/${draft.id}`, { upsell: draft.upsell, showBundles: draft.showBundles }).then(reload), "Ofertas salvas")} />
+      <SaveBar busy={busy} onSave={() => run(() => put(`/api/bots/${draft.id}`, { upsell: draft.upsell, showBundles: draft.showBundles, recovery: { enabled: !!draft.recovery?.enabled, downsellPlanId: draft.recovery?.downsellPlanId ?? null } }).then(reload), "Ofertas salvas")} />
     </div>
   );
 }

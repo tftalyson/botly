@@ -4,6 +4,7 @@ import * as s from "../db/schema.js";
 import type { Ctx } from "../domain/context.js";
 import { checkCharge } from "../domain/sales.js";
 import { cutExpired, planOutbox, sendDue } from "../domain/retention.js";
+import { recoveryTick } from "../domain/recovery.js";
 import { announcePaid } from "../bot/notify.js";
 import type { BotlyRuntime } from "../bot/runtime.js";
 
@@ -61,6 +62,7 @@ export function startTicks(ctx: Ctx, rt: BotlyRuntime) {
     await step("pix", () => reconcileCharges(ctx, rt));
     if (n % 10 === 1) await step("fila de lembretes", () => planOutbox(ctx));
     await step("envio de lembretes", () => sendDue(ctx, rt));
+    await step("recuperação de Pix", () => recoveryTick(ctx, rt));
     if (n % 5 === 1) await step("corte", () => cutExpired(ctx, rt));
     running = false;
   }, 60_000);

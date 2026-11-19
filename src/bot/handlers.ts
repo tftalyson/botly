@@ -14,6 +14,7 @@ import * as s from "../db/schema.js";
 import type { Ctx } from "../domain/context.js";
 import { activeAccess, touchCustomer, type Customer } from "../domain/customers.js";
 import { pickOrderBump, recordDecline } from "../domain/offers.js";
+import { downsellFor, recoverySteps } from "../domain/recovery.js";
 import { advanceFunnel, checkCharge, createOrder, createPixForOrder, logEvent, NoGatewayError, PIX_VALID_MINUTES } from "../domain/sales.js";
 import { registerChannel } from "../domain/setup.js";
 import type { OrderItem } from "../domain/types.js";
@@ -461,6 +462,42 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const last = (await ctx.db.select().from(s.charges).where(eq(s.charges.orderId, order.id)).orderBy(desc(s.charges.createdAt)).limit(1))[0];
     // Com uma forma de pagamento só, reenvia o mesmo Pix (se ainda valer) em vez de gerar outro.
     await pay(c, L, order.id, { avoidGatewayId: L.bot.routing.gatewayIds.length > 1 ? last?.gatewayId : null });
+  });
+
+  // ───────────── Recuperação de Pix (botão da mensagem "seu Pix ainda está esperando") ─────────────
+  // rc:<pedido original>:<modelo>. Com desconto ou plano mais barato, cria um pedido novo só agora (quando o cliente toca).
+  bot.callbackQuery(/^rc:([^:]+):([^:]+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    const order = (await ctx.db.select().from(s.orders).where(and(eq(s.orders.id, c.match[1]!), eq(s.orders.customerId, customer.id))))[0];
+    if (!order) return plansScreen(c);
+    if (order.status === "paid") {
+      await show(c, "✅ Seu pagamento já foi confirmado! Toque em /meuplano para ver seu acesso.");
+      return;
+    }
+    const t = (await ctx.db.select().from(s.templates).where(and(eq(s.templates.id, c.match[2]!), eq(s.templates.accountId, L.account.id), eq(s.templates.kind, "recovery"))))[0];
+    const steps = await recoverySteps(ctx, L.account.id);
+    const down = t && steps.at(-1)?.id === t.id ? await downsellFor(ctx, L.bot, order.totalCents) : null;
+    // Sem desconto e sem plano mais barato: é só mostrar o Pix de novo.
+    if (!t?.discountPct && !down) {
+      if (order.status === "pending") return pay(c, L, order.id, { fromMenu: true });
+      return plansScreen(c);
+    }
+    const items: OrderItem[] =
+      down && L.main
+        ? [{ type: "plan", refId: down.id, name: down.name, channelIds: [L.main.id], durationUnit: down.durationUnit, durationValue: down.durationValue, priceCents: down.priceCents }]
+        : order.items;
+    const subtotal = items.reduce((x, i) => x + i.priceCents, 0);
+    const discountCents = t?.discountPct ? Math.round((subtotal * t.discountPct) / 100) : 0;
+    const sig = JSON.stringify(items.map((i) => [i.type, i.refId, i.channelIds]));
+    const fresh =
+      (await reusableOrder(ctx, customer.id, botId, (o) => o.kind === "recovery" && o.discountCents === discountCents && JSON.stringify(o.items.map((i) => [i.type, i.refId, i.channelIds])) === sig)) ??
+      (await createOrder(ctx, { accountId: L.account.id, botId, customerId: customer.id, kind: "recovery", items, discountCents, source: "recuperacao" }));
+    // O pedido antigo sai de "pendente" (não conta em dobro). Se o Pix antigo ainda for pago, o acesso é liberado do mesmo jeito.
+    if (order.status === "pending") await ctx.db.update(s.orders).set({ status: "canceled" }).where(and(eq(s.orders.id, order.id), eq(s.orders.status, "pending")));
+    await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "recovery_clicked", meta: { rootOrderId: order.id, orderId: fresh.id, discountPct: t?.discountPct ?? 0, downsell: !!down } });
+    await pay(c, L, fresh.id, { fromMenu: true });
   });
 
   // ───────────── Renovação pelos botões do lembrete ─────────────

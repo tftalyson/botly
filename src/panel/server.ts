@@ -17,6 +17,7 @@ import { gatewayClient } from "../payments/gateway.js";
 import { dashboard, funnelPeople, FUNNEL_STEPS, type FunnelStep, type RangeKey } from "./dashboard.js";
 import { analyze, applyImport, suggestPlans } from "../domain/importer.js";
 import { FILE_ERR, IMPORT_SOURCES, sourceById } from "../domain/import-sources.js";
+import { ensureRecoveryTemplates } from "../domain/recovery.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { agentReply, assume, closeTicket, customerTrail, isSupportOpen, supportHours } from "../domain/support.js";
 import { InlineKeyboard } from "grammy";
@@ -336,6 +337,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
         renewal: z.object({ enabled: z.boolean(), extraChannelId: z.string().uuid().nullable().optional(), longPlanId: z.string().uuid().nullable().optional(), longPlanDiscountPct: z.number().int().min(0).max(90).optional() }).optional(),
       })
       .optional(),
+    recovery: z.object({ enabled: z.boolean(), downsellPlanId: z.string().uuid().nullable().optional() }).optional(),
     showBundles: z.boolean().optional(),
     status: z.enum(["active", "paused"]).optional(),
   });
@@ -346,6 +348,10 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     if (p.mainChannelId) {
       const ch = (await db.select().from(s.channels).where(and(eq(s.channels.id, p.mainChannelId), eq(s.channels.accountId, bot.accountId))))[0];
       if (!ch) throw notFound("Canal");
+    }
+    if (p.recovery?.downsellPlanId) {
+      const pl = (await db.select().from(s.plans).where(and(eq(s.plans.id, p.recovery.downsellPlanId), eq(s.plans.botId, bot.id))))[0];
+      if (!pl) throw notFound("Plano");
     }
     if (p.routing?.gatewayIds.length) {
       const ok = await db.select({ id: s.gateways.id }).from(s.gateways).where(and(eq(s.gateways.accountId, bot.accountId), inArray(s.gateways.id, p.routing.gatewayIds)));
@@ -382,6 +388,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
         ...(p.mainChannelId !== undefined ? { mainChannelId: p.mainChannelId } : {}),
         ...(p.routing ? { routing: p.routing } : {}),
         ...(p.upsell ? { upsell: { ...bot.upsell, ...p.upsell } } : {}),
+        ...(p.recovery ? { recovery: { ...bot.recovery, ...p.recovery } } : {}),
         ...(p.showBundles !== undefined ? { showBundles: p.showBundles } : {}),
         ...(p.status ? { status: p.status } : {}),
         updatedAt: ctx.now(),
@@ -765,7 +772,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
   });
 
   app.get("/api/templates", async (req) => {
-    const rows = await ensureTemplates(ctx, acc(req));
+    const rows = [...(await ensureTemplates(ctx, acc(req))), ...(await ensureRecoveryTemplates(ctx, acc(req)))];
     const a = (await db.select().from(s.accounts).where(eq(s.accounts.id, acc(req))))[0]!;
     return {
       reminderTime: a.settings.reminderTime ?? "10:00",
@@ -773,14 +780,15 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
       autoRemove: !!a.settings.autoRemove,
       templates: rows
         .filter((r) => !r.botId)
-        .map((r) => ({ id: r.id, kind: r.kind, days: Math.round(r.offsetMinutes / 1440), text: r.text, discountPct: r.discountPct, enabled: r.enabled, mediaUrl: r.media?.url ?? null }))
+        .map((r) => ({ id: r.id, kind: r.kind, days: Math.round(r.offsetMinutes / 1440), minutes: r.offsetMinutes, text: r.text, discountPct: r.discountPct, enabled: r.enabled, mediaUrl: r.media?.url ?? null }))
         .sort((x, y) => x.days - y.days),
     };
   });
 
   const tplBody = z.object({
-    kind: z.enum(["reminder", "winback"]),
-    days: z.number().int().min(-30).max(60),
+    kind: z.enum(["reminder", "winback", "recovery"]),
+    days: z.number().int().min(-30).max(60).optional(),
+    minutes: z.number().int().min(5).max(2880).optional(), // só recuperação: minutos depois de gerar o Pix
     text: z.string().trim().min(1).max(1024),
     discountPct: z.number().int().min(0).max(90).optional(),
     enabled: z.boolean().optional(),
@@ -791,7 +799,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
     if (p.kind === "winback" && p.days !== undefined && p.days < 1) throw new HttpError(400, "A mensagem de “volte” sai pelo menos 1 dia depois do vencimento.");
     return {
       ...(p.kind ? { kind: p.kind } : {}),
-      ...(p.days !== undefined ? { offsetMinutes: p.days * 1440 } : {}),
+      ...(p.kind === "recovery" ? (p.minutes !== undefined ? { offsetMinutes: p.minutes } : {}) : p.days !== undefined ? { offsetMinutes: p.days * 1440 } : {}),
       ...(p.text ? { text: p.text } : {}),
       ...(p.discountPct !== undefined ? { discountPct: p.discountPct } : {}),
       ...(p.enabled !== undefined ? { enabled: p.enabled } : {}),
@@ -806,6 +814,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
 
   app.post("/api/templates", async (req) => {
     const p = tplBody.parse(req.body);
+    if (p.kind === "recovery" && p.minutes === undefined) throw new HttpError(400, "Informe quantos minutos depois do Pix esta mensagem sai.");
     const [row] = await db.insert(s.templates).values({ accountId: acc(req), offsetMinutes: 0, text: p.text, kind: p.kind, ...tplValues(p) }).returning();
     await planOutbox(ctx, acc(req));
     return row;
