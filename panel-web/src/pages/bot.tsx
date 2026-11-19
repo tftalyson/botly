@@ -514,7 +514,7 @@ function OffersTab({ draft, setDraft, channels, plans, reload }: TabProps & { ch
       <div>
         <h2>Recuperar Pix não pago</h2>
         <p className="muted small">
-          Quem gerou o Pix e não pagou recebe mensagens automáticas (por padrão: 15 minutos depois, 2 horas depois com desconto e 24 horas depois com o plano mais barato). Os textos, os tempos e o desconto
+          Quem gerou o Pix e não pagou recebe mensagens automáticas: um lembrete, uma com desconto e, por último, o plano mais barato. Os textos, os tempos e o desconto
           ficam em <Link to="/lembretes">Lembretes</Link>.
         </p>
       </div>
