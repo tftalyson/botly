@@ -86,4 +86,18 @@ describe("lista de planos", () => {
     expect(kb).toContain("19,90");
     expect(deleted().length).toBe(1);
   });
+  it("apaga o Pix vencido, mas deixa o Pix ainda válido", async () => {
+    const cust = (await db.select().from(s.customers).where(eq(s.customers.telegramUserId, USER)))[0]!;
+    const gw = (await db.select().from(s.gateways))[0]!;
+    const mk = async (status: "pending" | "paid", expiresAt: Date, ids: number[]) => {
+      const [o] = await db.insert(s.orders).values({ accountId, botId, customerId: cust.id, kind: "new", items: [], subtotalCents: 1, totalCents: 1 }).returning();
+      await db.insert(s.charges).values({ accountId, orderId: o!.id, gatewayId: gw.id, provider: "pushinpay", providerTxId: "x" + ids[0], amountCents: 1, status, expiresAt, chatMessageIds: ids });
+    };
+    await mk("pending", new Date(now.getTime() - 60_000), [701, 702]); // vencido
+    await mk("pending", new Date(now.getTime() + 20 * 60_000), [703, 704]); // ainda vale
+    await mk("paid", new Date(now.getTime() - 60_000), [705]); // pago: comprovante fica
+    calls.length = 0;
+    await rt.handle(botId, cb("plans") as any);
+    expect(deleted().filter((m) => m >= 700).sort()).toEqual([701, 702]);
+  });
 });

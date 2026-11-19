@@ -97,6 +97,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const where = and(eq(s.customerBots.customerId, customerId), eq(s.customerBots.botId, botId));
     const old = (await ctx.db.select({ m: s.customerBots.catalogMsgId }).from(s.customerBots).where(where))[0]?.m;
     await ctx.db.update(s.customerBots).set({ catalogMsgId: newId }).where(where);
+    await deleteStalePix(c, customerId);
     if (old && old !== newId && c.chat) {
       try {
         await c.api.deleteMessage(c.chat.id, old);
@@ -301,7 +302,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     const bump = await pickOrderBump(ctx, L.bot, customer.id, L.account.settings.offerCooldownDays ?? 30);
     if (bump) {
       await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "bump_offered", meta: { channelId: bump.channel.id, orderId: order.id } });
-      await show(
+      const bumpMsg = await show(
         c,
         `Você escolheu <b>${esc(plan.name)} — ${brl(plan.priceCents)}</b>.\n\n➕ Quer adicionar o canal <b>${esc(chName(bump.channel))}</b> por só <b>+${brl(bump.priceCents)}</b>?\n<i>(vence junto com o seu plano)</i>`,
         new InlineKeyboard()
@@ -310,6 +311,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
           .text("Não, só o plano", `bump:n:${order.id}`),
         { replace: true },
       );
+      await trackCatalog(c, customer.id, bumpMsg); // oferta abandonada some quando vier uma lista nova
       return;
     }
     await pay(c, L, order.id, { fromMenu: true });
@@ -428,6 +430,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       `Copie o código Pix abaixo e pague no app do seu banco.\n⏳ O Pix vale por ${minutesLeft} minutos. A liberação é automática.`;
     // Some o Pix antigo deste pedido (inclusive o mesmo, que vai ser reenviado).
     await deletePixMessages(c, orderId, null);
+    await deleteStalePix(c, order.customerId);
     await dropWait();
     const ids: number[] = [];
     const qr = await QRCode.toBuffer(code, { width: 480, margin: 2 }).catch(() => null);
@@ -440,6 +443,26 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     });
     ids.push(codeMsg.message_id);
     await ctx.db.update(s.charges).set({ chatMessageIds: ids }).where(eq(s.charges.id, charge.id));
+  }
+
+  /**
+   * Apaga as mensagens de Pix que já não servem: vencidos, de pedido cancelado ou que falharam.
+   * Pix ainda válido e pago (comprovante) ficam. Roda quando o cliente pede planos ou recebe um Pix novo.
+   */
+  async function deleteStalePix(c: Context, customerId: string) {
+    if (!c.chat) return;
+    const rows = await ctx.db
+      .select({ id: s.charges.id, ids: s.charges.chatMessageIds, status: s.charges.status, expiresAt: s.charges.expiresAt, orderStatus: s.orders.status })
+      .from(s.charges)
+      .innerJoin(s.orders, eq(s.orders.id, s.charges.orderId))
+      .where(and(eq(s.orders.customerId, customerId), eq(s.orders.botId, botId), sql`jsonb_array_length(${s.charges.chatMessageIds}) > 0`));
+    const now = ctx.now().getTime();
+    for (const r of rows) {
+      const stale = r.status === "expired" || r.status === "failed" || (r.status === "pending" && ((r.expiresAt?.getTime() ?? Infinity) < now || r.orderStatus !== "pending"));
+      if (!stale) continue;
+      for (const mid of r.ids) await c.api.deleteMessage(c.chat.id, mid).catch(() => {});
+      await ctx.db.update(s.charges).set({ chatMessageIds: [] }).where(eq(s.charges.id, r.id));
+    }
   }
 
   /** Apaga as mensagens de Pix anteriores deste pedido (menos a cobrança atual). */
