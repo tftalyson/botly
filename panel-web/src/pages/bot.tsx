@@ -397,6 +397,8 @@ function OffersTab({ draft, setDraft, channels, plans, reload }: TabProps & { ch
   const { busy, run } = useAction();
   const ob = draft.upsell.orderBump ?? { enabled: false, channelIds: [] };
   const extras = channels.filter((c) => c.active && c.id !== draft.mainChannelId);
+  const ps = draft.upsell.postSale ?? { enabled: false, discountPct: 20, validMinutes: 30 };
+  const setPs = (v: typeof ps) => setDraft({ ...draft, upsell: { ...draft.upsell, postSale: v } });
   const setOb = (v: typeof ob) => setDraft({ ...draft, upsell: { ...draft.upsell, orderBump: v } });
   return (
     <div className="panel stack">
@@ -445,6 +447,29 @@ function OffersTab({ draft, setDraft, channels, plans, reload }: TabProps & { ch
         ) : (
           <div className="note warn small">Cadastre outros canais para oferecer como extra.</div>
         ))}
+      <hr style={{ border: 0, borderTop: "1px solid var(--line-2)", width: "100%" }} />
+      <div>
+        <h2>Oferta depois da compra</h2>
+        <p className="muted small">
+          Quem recusou o canal extra e pagou recebe, logo depois da confirmação, uma última chance com desconto e prazo curto. O canal oferecido é o mesmo que ele recusou. Precisa do “Canal extra antes do Pix”
+          ligado acima. Uma oferta por compra.
+        </p>
+      </div>
+      <Toggle checked={ps.enabled} onChange={(v) => setPs({ ...ps, enabled: v })}>
+        Oferecer depois da compra
+      </Toggle>
+      {ps.enabled && (
+        <div className="grid-2">
+          <label className="field">
+            Desconto (%)
+            <input type="number" min={0} max={90} value={ps.discountPct} onChange={(e) => setPs({ ...ps, discountPct: Math.max(0, Math.min(90, Number(e.target.value) || 0)) })} />
+          </label>
+          <label className="field">
+            A oferta vale por (minutos)
+            <input type="number" min={1} max={1440} value={ps.validMinutes} onChange={(e) => setPs({ ...ps, validMinutes: Math.max(1, Math.min(1440, Number(e.target.value) || 1)) })} />
+          </label>
+        </div>
+      )}
       <hr style={{ border: 0, borderTop: "1px solid var(--line-2)", width: "100%" }} />
       <div>
         <h2>Na renovação</h2>

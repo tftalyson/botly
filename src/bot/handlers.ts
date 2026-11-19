@@ -7,7 +7,7 @@
 //   chk:<cobrancaId>       "Já paguei"
 //   new:<pedidoId>         "Gerar outro Pix" (outro gateway primeiro)
 import { chName } from "../domain/channel-name.js";
-import { and, asc, eq, gt, inArray, desc } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, desc, sql } from "drizzle-orm";
 import { InlineKeyboard, InputFile, type Bot, type Context } from "grammy";
 import QRCode from "qrcode";
 import * as s from "../db/schema.js";
@@ -498,6 +498,43 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     if (order.status === "pending") await ctx.db.update(s.orders).set({ status: "canceled" }).where(and(eq(s.orders.id, order.id), eq(s.orders.status, "pending")));
     await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "recovery_clicked", meta: { rootOrderId: order.id, orderId: fresh.id, discountPct: t?.discountPct ?? 0, downsell: !!down } });
     await pay(c, L, fresh.id, { fromMenu: true });
+  });
+
+  // ───────────── Oferta pós-venda ─────────────
+  // ps:<pedido que acabou de pagar>. Vale até o horário gravado na oferta; o desconto também vem dela (não do botão).
+  bot.callbackQuery(/^ps:(.+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    const ev = (
+      await ctx.db
+        .select()
+        .from(s.events)
+        .where(and(eq(s.events.customerId, customer.id), eq(s.events.type, "postsale_offered"), sql`${s.events.meta}->>'orderId' = ${c.match[1]!}`))
+        .limit(1)
+    )[0];
+    if (!ev) return;
+    const m = ev.meta as { channelId: string; discountPct: number; priceCents: number; until: string };
+    if (new Date(m.until).getTime() < ctx.now().getTime()) {
+      await show(c, "⏰ Essa oferta já expirou. Toque em /start para ver os planos e canais.");
+      return;
+    }
+    const ch = (await ctx.db.select().from(s.channels).where(and(eq(s.channels.id, m.channelId), eq(s.channels.active, true))))[0];
+    const base = (await ctx.db.select().from(s.orders).where(eq(s.orders.id, c.match[1]!)))[0];
+    if (!ch || !base || (await activeAccess(ctx, customer.id, ch.id))) {
+      await show(c, "✅ Você já tem esse canal. Toque em /meuplano para ver seu acesso.");
+      return;
+    }
+    const main = base.items[0]!;
+    const full = L.bot.upsell.orderBump?.priceOverrides?.[ch.id] ?? ch.extraPriceCents ?? m.priceCents;
+    const items: OrderItem[] = [{ type: "extra", refId: ch.id, name: chName(ch), channelIds: [ch.id], durationUnit: main.durationUnit, durationValue: main.durationValue, priceCents: full }];
+    const discountCents = Math.max(0, full - m.priceCents);
+    const sig = JSON.stringify(items.map((i) => [i.type, i.refId, i.channelIds]));
+    const order =
+      (await reusableOrder(ctx, customer.id, botId, (o) => o.kind === "upsell" && o.discountCents === discountCents && JSON.stringify(o.items.map((i) => [i.type, i.refId, i.channelIds])) === sig)) ??
+      (await createOrder(ctx, { accountId: L.account.id, botId, customerId: customer.id, kind: "upsell", items, discountCents, source: "pos-venda" }));
+    await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "postsale_clicked", meta: { orderId: base.id, upsellOrderId: order.id, channelId: ch.id, priceCents: m.priceCents } });
+    await pay(c, L, order.id, { fromMenu: true });
   });
 
   // ───────────── Renovação pelos botões do lembrete ─────────────

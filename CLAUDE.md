@@ -68,12 +68,13 @@ Só copiamos código (crypto, integrações PushinPay e Paggone).
 - Segurança do painel (Fase A): login/CSRF conferidos em `onRequest` (antes de ler o corpo); corpo > 1 MB só em /api/media e /api/import; CSP, HSTS (produção), Permissions-Policy; login gasta o mesmo tempo com e-mail inexistente (DUMMY_HASH) e tem limite por IP (40) além de IP+e-mail (8); log do webhook de pagamento não guarda o corpo. Corte reconfere o acesso antes de banir; Retenção avisa quando há vencidos em canal sem bot gestor.
 - Testes: `test/flow.test.ts` (Telegram e PushinPay simulados, fluxo inteiro), `test/panel.test.ts` (API do painel) e `test/retention.test.ts` (fila, envio, renovação pelo botão, corte simulado/real, volte com desconto).
 - Recuperação de Pix (`src/domain/recovery.ts`, `recoveryTick` a cada minuto, DESLIGADA por padrão: aba Ofertas do bot → "Recuperar Pix não pago" + plano mais barato opcional): modelos kind "recovery" (padrão 15 min sem desconto, 2 h 10%, 24 h; editáveis em Lembretes → "Pix gerado e não pago", minutos após o 1º Pix); último passo = plano mais barato do bot (`bots.recovery.downsellPlanId`) se for menor que o pedido. Cada passo é reservado em `orders.recovery_step` (sem duplicar); passo atrasado +3 h é pulado; não manda a quem pagou depois ou bloqueou o bot. Botão `rc:<pedido>:<modelo>` cria pedido kind "recovery" com desconto, cancela o antigo e gera o Pix. Eventos `recovery_sent`/`recovery_clicked` (aparecem no rastro). Teste: `test/recovery.test.ts`.
+- Oferta pós-venda (`src/domain/postsale.ts`, `bots.upsell.postSale {enabled, discountPct, validMinutes}`, DESLIGADA por padrão; aba Ofertas → "Oferta depois da compra"): ao confirmar o pagamento de pedido novo/recuperação sem extra, se o cliente recusou o canal extra nas últimas 48 h (evento `bump_declined`), `announcePaid` manda mensagem à parte com o MESMO canal com desconto e prazo; botão `ps:<pedido>` cria pedido kind "upsell" (extra com a duração do plano, desconto e prazo vêm do evento `postsale_offered`, não do botão). Uma oferta por pedido. Eventos `postsale_offered`/`postsale_clicked` no rastro. Teste: `test/postsale.test.ts`.
 
 ## Ainda falta (próximas etapas)
-Ordem combinada: 1) ✅ lembretes + corte (simulação) + página Retenção; 2) ✅ importação do AutomatizzeBot (falta: leads/usuários que nunca compraram); 3) ✅ Dashboard, falta Clientes; 4) ✅ recuperação de Pix, falta oferta pós-venda.
+Ordem combinada: 1) ✅ lembretes + corte (simulação) + página Retenção; 2) ✅ importação do AutomatizzeBot (falta: leads/usuários que nunca compraram); 3) ✅ Dashboard, falta Clientes; 4) ✅ recuperação de Pix e oferta pós-venda.
 - Painel: Clientes, super admin.
 - Atendimento, ideias: respostas prontas, gerar Pix pelo atendimento, várias pessoas atendendo (usuários da conta).
-- Oferta pós-venda, importação de leads (quem nunca comprou).
+- Importação de leads (quem nunca comprou).
 
 ## Confirmado em produção
 - 15/11: compra real com PushinPay (R$ 1,00, bot de teste @cervoadmbot, canal privado "Cervo – Atualizações"): Pix gerado e pagamento reconhecido NA HORA pelo aviso da PushinPay (token no caminho do endereço).

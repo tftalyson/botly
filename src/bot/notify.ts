@@ -10,6 +10,7 @@ import { brl } from "../lib/money.js";
 import { DEFAULT_TZ, fmtDate } from "../lib/time.js";
 import { addMessage, isSupportOpen, offHoursText, openTicket } from "../domain/support.js";
 import { logEvent } from "../domain/sales.js";
+import { pickPostSale } from "../domain/postsale.js";
 import type { BotlyRuntime } from "./runtime.js";
 
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -44,6 +45,24 @@ export async function announcePaid(ctx: Ctx, rt: BotlyRuntime, r: PaidResult) {
     );
   } catch (err) {
     ctx.log.warn({ orderId: order.id, err: String(err) }, "falha ao avisar o cliente do pagamento");
+  }
+
+  // Oferta pós-venda (só para quem recusou o canal extra): mensagem à parte, depois da confirmação.
+  try {
+    const botRow = (await ctx.db.select().from(s.bots).where(eq(s.bots.id, order.botId)))[0];
+    const offer = botRow ? await pickPostSale(ctx, botRow, order) : null;
+    if (offer) {
+      const until = new Date(ctx.now().getTime() + offer.validMinutes * 60_000);
+      const api = await rt.api(order.botId);
+      await api.sendMessage(
+        customer.telegramUserId,
+        `🎁 <b>Oferta só para você, válida por ${offer.validMinutes} min</b>\n\nAdicione o canal <b>${esc(chName(offer.channel))}</b> por <b>${brl(offer.priceCents)}</b>${offer.discountPct ? ` <s>${brl(offer.fullCents)}</s> (${offer.discountPct}% de desconto)` : ""}.\n<i>Vence junto com o seu plano.</i>`,
+        { parse_mode: "HTML", reply_markup: new InlineKeyboard().text(`✅ Quero o ${chName(offer.channel)}`, `ps:${order.id}`) },
+      );
+      await logEvent(ctx, { accountId: order.accountId, botId: order.botId, customerId: customer.id, type: "postsale_offered", meta: { orderId: order.id, channelId: offer.channel.id, discountPct: offer.discountPct, priceCents: offer.priceCents, until: until.toISOString() } });
+    }
+  } catch (err) {
+    ctx.log.warn({ orderId: order.id, err: String(err) }, "falha na oferta pós-venda");
   }
 
   const notifyChat = account.settings.notifyChatId;
