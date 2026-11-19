@@ -86,6 +86,17 @@ describe("lista de planos", () => {
     expect(kb).toContain("19,90");
     expect(deleted().length).toBe(1);
   });
+  it("a cor escolhida no plano vai no botão (e sem cor não manda o campo)", async () => {
+    await db.update(s.plans).set({ buttonStyle: "success" }).where(eq(s.plans.botId, botId));
+    calls.length = 0;
+    await rt.handle(botId, cb("plans") as any);
+    const btn = plansMsgs()[0]!.payload.reply_markup.inline_keyboard[0][0];
+    expect(btn.style).toBe("success");
+    await db.update(s.plans).set({ buttonStyle: null }).where(eq(s.plans.botId, botId));
+    calls.length = 0;
+    await rt.handle(botId, cb("plans") as any);
+    expect("style" in plansMsgs()[0]!.payload.reply_markup.inline_keyboard[0][0]).toBe(false);
+  });
   it("apaga o Pix vencido, mas deixa o Pix ainda válido", async () => {
     const cust = (await db.select().from(s.customers).where(eq(s.customers.telegramUserId, USER)))[0]!;
     const gw = (await db.select().from(s.gateways))[0]!;

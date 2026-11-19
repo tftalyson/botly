@@ -223,6 +223,14 @@ function PlansTab({ botId, plans, reload }: { botId: string; plans: Plan[]; relo
   );
 }
 
+const STYLE_OPTIONS: { value: "primary" | "success" | "danger" | null; label: string; color: string }[] = [
+  { value: null, label: "Padrão", color: "#9aa0b4" },
+  { value: "primary", label: "Azul", color: "#2f6fe4" },
+  { value: "success", label: "Verde", color: "#2faa5a" },
+  { value: "danger", label: "Vermelho", color: "#e0433a" },
+];
+const STYLE_BG: Record<string, string> = { primary: "#2f6fe4", success: "#2faa5a", danger: "#e0433a" };
+
 function PlanRow({ plan, botId, reload, onCancel }: { plan?: Plan; botId?: string; reload: () => void; onCancel?: () => void }) {
   const [f, setF] = useState({
     name: plan?.name ?? "",
@@ -230,9 +238,10 @@ function PlanRow({ plan, botId, reload, onCancel }: { plan?: Plan; botId?: strin
     durationValue: plan?.durationValue ?? 1,
     priceCents: plan?.priceCents ?? null,
     highlight: plan?.highlight ?? false,
+    buttonStyle: (plan?.buttonStyle ?? null) as "primary" | "success" | "danger" | null,
   });
   const { busy, run } = useAction();
-  const dirty = !plan || f.name !== plan.name || f.durationUnit !== plan.durationUnit || f.durationValue !== plan.durationValue || f.priceCents !== plan.priceCents || f.highlight !== plan.highlight;
+  const dirty = !plan || f.name !== plan.name || f.durationUnit !== plan.durationUnit || f.durationValue !== plan.durationValue || f.priceCents !== plan.priceCents || f.highlight !== plan.highlight || f.buttonStyle !== (plan.buttonStyle ?? null);
   const save = () =>
     run(async () => {
       if (!f.name.trim()) throw new Error("Dê um nome ao plano.");
@@ -292,6 +301,22 @@ function PlanRow({ plan, botId, reload, onCancel }: { plan?: Plan; botId?: strin
         <Toggle checked={f.highlight} onChange={(v) => setF({ ...f, highlight: v })}>
           <span className="small">Destacar com ⭐ ({durationLabel(f.durationUnit, f.durationValue)})</span>
         </Toggle>
+        <div className="row" style={{ alignItems: "center", marginTop: 8, gap: 8 }} role="radiogroup" aria-label="Cor do botão">
+          <span className="small">Cor do botão:</span>
+          {STYLE_OPTIONS.map((o) => (
+            <button
+              key={o.label}
+              type="button"
+              role="radio"
+              aria-checked={f.buttonStyle === o.value}
+              className={`btn small${f.buttonStyle === o.value ? " primary" : ""}`}
+              onClick={() => setF({ ...f, buttonStyle: o.value })}
+            >
+              <span aria-hidden style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: o.color, marginRight: 6, border: "1px solid rgba(0,0,0,.2)" }} />
+              {o.label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -620,7 +645,7 @@ function ChatPreview({ bot, plans, channelTitle }: { bot: BotDetail; plans: Plan
             </div>
             <div className="kb">
               {plans.map((p) => (
-                <div key={p.id}>
+                <div key={p.id} style={p.buttonStyle ? { background: STYLE_BG[p.buttonStyle] } : undefined}>
                   {p.highlight ? "⭐ " : ""}
                   {p.name} — {brl(p.priceCents)}
                 </div>

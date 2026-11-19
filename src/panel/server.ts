@@ -452,7 +452,7 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
 
   // ─── Planos ───
 
-  const planBody = z.object({ name: z.string().trim().min(1).max(60), durationUnit: unit, durationValue: z.number().int().min(1).max(3650), priceCents: cents.min(100), highlight: z.boolean().optional(), active: z.boolean().optional() });
+  const planBody = z.object({ name: z.string().trim().min(1).max(60), durationUnit: unit, durationValue: z.number().int().min(1).max(3650), priceCents: cents.min(100), highlight: z.boolean().optional(), buttonStyle: z.enum(["primary", "success", "danger"]).nullable().optional(), active: z.boolean().optional() });
 
   app.post<{ Params: { id: string } }>("/api/bots/:id/plans", async (req) => {
     const bot = await ownBot(req, req.params.id);

@@ -86,6 +86,7 @@ export interface Plan {
   durationValue: number;
   priceCents: number;
   highlight: boolean;
+  buttonStyle?: "primary" | "success" | "danger" | null;
   active: boolean;
   sortOrder: number;
 }

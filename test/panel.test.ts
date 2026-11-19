@@ -85,6 +85,9 @@ describe("painel", () => {
     expect(chans[0].managerBot.username).toBe("PainelBot");
     const plan = await call("POST", `/api/bots/${bot.body.id}/plans`, { name: "Mensal", durationUnit: "month", durationValue: 1, priceCents: 2490 });
     expect(plan.status).toBe(200);
+    expect((await call("PUT", `/api/plans/${plan.body.id}`, { buttonStyle: "success" })).body.buttonStyle).toBe("success");
+    expect((await call("PUT", `/api/plans/${plan.body.id}`, { buttonStyle: "rosa" })).status).toBe(400);
+    expect((await call("PUT", `/api/plans/${plan.body.id}`, { buttonStyle: null })).body.buttonStyle).toBeNull();
     expect((await call("POST", "/api/bundles", { name: "Combo", durationUnit: "month", durationValue: 1, priceCents: 3990, channelIds: [c1.body.id] })).status).toBe(400);
     expect((await call("POST", "/api/bundles", { name: "Combo", durationUnit: "month", durationValue: 1, priceCents: 3990, channelIds: [c1.body.id, c2.body.id] })).status).toBe(200);
     const gw = await call("POST", "/api/gateways", { provider: "pushinpay", label: "Push", key: "token-de-teste-123" });

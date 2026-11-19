@@ -228,7 +228,7 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
       return;
     }
     const kb = new InlineKeyboard();
-    for (const p of L.plans) kb.text(`${p.highlight ? "⭐ " : ""}${p.name} — ${brl(p.priceCents)}`, `p:${p.id}`).row();
+    for (const p of L.plans) kb.add({ text: `${p.highlight ? "⭐ " : ""}${p.name} — ${brl(p.priceCents)}`, callback_data: `p:${p.id}`, ...(p.buttonStyle ? { style: p.buttonStyle } : {}) }).row();
     if (L.bot.showBundles && (await activeBundles(L.account.id)).length) kb.text("🔥 Pacotes promocionais", "bundles").row();
     await trackCatalog(c, customer.id, await show(c, "💎 <b>Escolha seu plano:</b>", kb, { replace }));
   }

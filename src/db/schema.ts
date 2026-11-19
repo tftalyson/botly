@@ -203,6 +203,8 @@ export const plans = pgTable(
     sortOrder: integer("sort_order").notNull().default(0),
     /** Destaque visual ("mais vendido"). */
     highlight: boolean("highlight").notNull().default(false),
+    /** Cor do botão no Telegram: primary (azul) | success (verde) | danger (vermelho); vazio = padrão. */
+    buttonStyle: text("button_style", { enum: ["primary", "success", "danger"] }),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
   },

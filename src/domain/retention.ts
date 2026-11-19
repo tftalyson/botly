@@ -122,7 +122,7 @@ async function buttons(ctx: Ctx, bot: typeof s.bots.$inferSelect, a: Access, t: 
   }
   if (r?.enabled && r.longPlanId && r.longPlanId !== a.planId) {
     const lp = (await ctx.db.select().from(s.plans).where(and(eq(s.plans.id, r.longPlanId), eq(s.plans.active, true))))[0];
-    if (lp) kb.text(`💰 ${lp.name} — ${brl(lp.priceCents)}`, `p:${lp.id}`).row();
+    if (lp) kb.add({ text: `💰 ${lp.name} — ${brl(lp.priceCents)}`, callback_data: `p:${lp.id}`, ...(lp.buttonStyle ? { style: lp.buttonStyle } : {}) }).row();
   }
   return kb;
 }

@@ -57,6 +57,13 @@
       "when": 1795128532723,
       "tag": "0007_apagar_planos_antigos",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795130745947,
+      "tag": "0008_cor_botao_plano",
+      "breakpoints": true
     }
   ]
 }
