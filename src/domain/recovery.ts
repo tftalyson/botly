@@ -64,12 +64,13 @@ export async function recoveryTick(ctx: Ctx, rt: BotlyRuntime, limit = 40) {
     if (!steps.length) continue;
     const maxAge = steps[steps.length - 1]!.offsetMinutes * 60_000 + LATE_MS;
     const since = new Date(now.getTime() - maxAge - 3600_000);
-    // Pedidos pendentes com Pix gerado (kind "recovery" não recupera de novo).
+    // Pedidos pendentes com Pix gerado há pouco (o tempo conta do Pix MAIS RECENTE do pedido, pois o pedido pode ser reaproveitado;
+    // kind "recovery" não recupera de novo).
     const orders = await ctx.db
-      .select({ o: s.orders, firstPix: sql<Date>`min(${s.charges.createdAt})` })
+      .select({ o: s.orders, firstPix: sql<Date>`max(${s.charges.createdAt})` })
       .from(s.orders)
       .innerJoin(s.charges, eq(s.charges.orderId, s.orders.id))
-      .where(and(eq(s.orders.botId, bot.id), eq(s.orders.status, "pending"), inArray(s.orders.kind, ["new", "renewal", "bundle"]), gt(s.orders.createdAt, since), lt(s.orders.recoveryStep, steps.length)))
+      .where(and(eq(s.orders.botId, bot.id), eq(s.orders.status, "pending"), inArray(s.orders.kind, ["new", "renewal", "bundle"]), gt(s.charges.createdAt, since), lt(s.orders.recoveryStep, steps.length)))
       .groupBy(s.orders.id);
     for (const { o, firstPix } of orders) {
       if (sentCount >= limit) return;
@@ -90,7 +91,7 @@ export async function recoveryTick(ctx: Ctx, rt: BotlyRuntime, limit = 40) {
         .where(and(eq(s.orders.id, o.id), eq(s.orders.recoveryStep, from), eq(s.orders.status, "pending")))
         .returning({ id: s.orders.id });
       if (!claimed.length) continue;
-      const res = await sendRecovery(ctx, rt, bot, o, steps, step);
+      const res = await sendRecovery(ctx, rt, bot, o, steps, step, new Date(base));
       if (res === "retry") await ctx.db.update(s.orders).set({ recoveryStep: from }).where(eq(s.orders.id, o.id));
       else if (res === "stop") await ctx.db.update(s.orders).set({ recoveryStep: steps.length }).where(eq(s.orders.id, o.id));
       else if (res === "sent") sentCount++;
@@ -98,10 +99,10 @@ export async function recoveryTick(ctx: Ctx, rt: BotlyRuntime, limit = 40) {
   }
 }
 
-async function sendRecovery(ctx: Ctx, rt: BotlyRuntime, bot: typeof s.bots.$inferSelect, o: typeof s.orders.$inferSelect, steps: Template[], idx: number): Promise<"sent" | "stop" | "skip" | "retry"> {
+async function sendRecovery(ctx: Ctx, rt: BotlyRuntime, bot: typeof s.bots.$inferSelect, o: typeof s.orders.$inferSelect, steps: Template[], idx: number, pixAt: Date): Promise<"sent" | "stop" | "skip" | "retry"> {
   const t = steps[idx]!;
   // Já pagou outra coisa depois deste pedido? Não incomoda.
-  const paidAfter = await ctx.db.select({ id: s.orders.id }).from(s.orders).where(and(eq(s.orders.customerId, o.customerId), eq(s.orders.status, "paid"), gt(s.orders.paidAt, o.createdAt))).limit(1);
+  const paidAfter = await ctx.db.select({ id: s.orders.id }).from(s.orders).where(and(eq(s.orders.customerId, o.customerId), eq(s.orders.status, "paid"), gt(s.orders.paidAt, pixAt))).limit(1);
   if (paidAfter.length) return "stop";
   const link = (await ctx.db.select().from(s.customerBots).where(and(eq(s.customerBots.customerId, o.customerId), eq(s.customerBots.botId, bot.id))))[0];
   if (!link?.canMessage) return "stop";

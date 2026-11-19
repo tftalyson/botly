@@ -1,5 +1,5 @@
 // Venda: pedido → Pix → pagamento confirmado → acesso liberado/estendido.
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import * as s from "../db/schema.js";
 import type { OrderItem } from "./types.js";
 import { FUNNEL, type Ctx, type FunnelStage } from "./context.js";
@@ -58,6 +58,10 @@ export async function createPixForOrder(ctx: Ctx, orderId: string, opts: { avoid
   const tz = account.settings.timezone ?? DEFAULT_TZ;
   const list = await gatewayOrder(ctx.db, order.accountId, bot.routing, now, tz, { avoid: opts.avoidGatewayId });
   if (!list.length) throw new NoGatewayError("Nenhuma forma de pagamento ativa neste bot.");
+  // Pedido reaproveitado (o cliente voltou ao mesmo plano): se não há Pix em aberto, é uma tentativa nova
+  // e a recuperação de Pix recomeça do 1º passo. "Gerar outro Pix" (já há um em aberto) não recomeça.
+  const open = await ctx.db.select({ id: s.charges.id }).from(s.charges).where(and(eq(s.charges.orderId, order.id), eq(s.charges.status, "pending"), gt(s.charges.expiresAt, now))).limit(1);
+  if (!open.length && order.recoveryStep > 0) await ctx.db.update(s.orders).set({ recoveryStep: 0 }).where(eq(s.orders.id, order.id));
   const expiresAt = new Date(now.getTime() + PIX_VALID_MINUTES * 60_000);
   const errors: string[] = [];
   for (const g of list) {

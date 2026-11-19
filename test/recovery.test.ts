@@ -7,6 +7,7 @@ import { runMigrations } from "../src/db/migrate.js";
 import * as s from "../src/db/schema.js";
 import type { Ctx } from "../src/domain/context.js";
 import { recoveryTick } from "../src/domain/recovery.js";
+import { createPixForOrder } from "../src/domain/sales.js";
 import { encryptJson } from "../src/lib/crypto.js";
 import { silentLog } from "../src/lib/log.js";
 import { createRuntime } from "../src/bot/runtime.js";
@@ -160,5 +161,24 @@ describe("recuperação de Pix", () => {
     await recoveryTick(ctx, rt);
     expect(msgs().length).toBe(0);
     expect(await step(o.id)).toBe(3);
+  });
+  it("pedido reaproveitado: um Pix novo no mesmo pedido recomeça a recuperação", async () => {
+    calls.length = 0;
+    await db.update(s.orders).set({ status: "canceled" }).where(eq(s.orders.status, "pending"));
+    const old = await pending(3 * 24 * 60); // pedido de 3 dias atrás, já passou por todos os passos
+    await db.update(s.charges).set({ status: "expired" }).where(eq(s.charges.orderId, old.id));
+    await db.update(s.orders).set({ recoveryStep: 3 }).where(eq(s.orders.id, old.id));
+    await recoveryTick(ctx, rt);
+    expect(msgs().length).toBe(0); // sem Pix novo, nada
+    await createPixForOrder(ctx, old.id); // o cliente voltou e gerou outro Pix
+    expect(await step(old.id)).toBe(0);
+    await db.update(s.charges).set({ createdAt: now, expiresAt: min(30) }).where(eq(s.charges.status, "pending")); // relógio do teste
+    now = min(16);
+    await recoveryTick(ctx, rt);
+    expect(msgs().length).toBe(1);
+    expect(String(msgs()[0]!.payload.text)).toContain("ainda está esperando");
+    // "Gerar outro Pix" com um em aberto não recomeça
+    await createPixForOrder(ctx, old.id);
+    expect(await step(old.id)).toBe(1);
   });
 });
