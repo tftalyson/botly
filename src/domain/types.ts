@@ -85,3 +85,30 @@ export interface OrderItem {
   /** Extra comprado no meio do ciclo: vence junto com o plano principal. */
   alignToExpiresAt?: string | null;
 }
+
+/** Público de uma transmissão. */
+export interface BroadcastAudience {
+  /** all = todos · active = com acesso ativo · expired = já foram clientes e não têm acesso ativo · never = nunca compraram. */
+  segment: "all" | "active" | "expired" | "never";
+  /** Só quem tem (has) ou não tem (hasnt) acesso ativo a este canal. */
+  channelId?: string | null;
+  channelMode?: "has" | "hasnt";
+  /** Só com segment active: vence nos próximos N dias. */
+  expiringDays?: number | null;
+}
+
+export interface BroadcastContent {
+  /** Texto em HTML do Telegram. {nome} vira o primeiro nome. */
+  text: string;
+  media?: { type: "photo" | "video" | "animation"; mediaId?: string | null; url?: string | null } | null;
+  /** Botão abaixo da mensagem. */
+  button?: {
+    kind: "none" | "plans" | "url" | "offer";
+    label?: string;
+    url?: string;
+    /** offer: plano com desconto, por tempo limitado (só com um bot escolhido). */
+    planId?: string;
+    discountPct?: number;
+    validMinutes?: number;
+  } | null;
+}

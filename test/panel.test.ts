@@ -130,4 +130,22 @@ describe("painel", () => {
     const ov = (await call("GET", "/api/overview")).body;
     expect(ov.checklist).toEqual({ gateway: true, bot: true, channel: true, mainChannel: true, plans: true, routing: true });
   });
+  it("transmissões: valida, conta o público, agenda e cancela", async () => {
+    const bots = (await call("GET", "/api/bots")).body;
+    const botId = bots[0].id;
+    const base = { botIds: [botId], audience: { segment: "all" }, content: { text: "Oi" } };
+    expect((await call("POST", "/api/broadcasts/audience", { botIds: [botId], audience: { segment: "never" } })).body.count).toBe(0);
+    expect((await call("POST", "/api/broadcasts", { ...base, content: { text: "" } })).status).toBe(400);
+    expect((await call("POST", "/api/broadcasts", { ...base, botIds: ["6b9c2d4e-0000-4000-8000-000000000000"] })).status).toBe(400);
+    const offer = await call("POST", "/api/broadcasts", { ...base, content: { text: "Oi", button: { kind: "offer", planId: "6b9c2d4e-0000-4000-8000-000000000000", discountPct: 10, validMinutes: 30 } } });
+    expect(offer.status).toBe(400);
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const ok = await call("POST", "/api/broadcasts", { ...base, scheduledAt: future });
+    expect(ok.status).toBe(200);
+    const list = (await call("GET", "/api/broadcasts")).body.broadcasts;
+    expect(list[0]).toMatchObject({ id: ok.body.id, status: "scheduled" });
+    expect((await call("POST", `/api/broadcasts/${ok.body.id}/cancel`)).status).toBe(200);
+    expect((await call("POST", `/api/broadcasts/${ok.body.id}/cancel`)).status).toBe(404);
+    expect((await call("GET", `/api/broadcasts/${ok.body.id}`)).body.status).toBe("canceled");
+  });
 });

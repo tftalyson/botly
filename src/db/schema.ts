@@ -27,6 +27,8 @@ import {
 import type {
   AccountSettings,
   BotRecovery,
+  BroadcastAudience,
+  BroadcastContent,
   BotRouting,
   BotUpsell,
   BotWelcome,
@@ -470,6 +472,46 @@ export const outbox = pgTable(
     uniqueIndex("outbox_dedupe").on(t.accountId, t.dedupeKey),
     index("outbox_account_status_when").on(t.accountId, t.status, t.scheduledFor),
   ],
+);
+
+/** Transmissões (mailing): mensagem em massa pelo bot, com filtro de público e agendamento. */
+export const broadcasts = pgTable(
+  "broadcasts",
+  {
+    id: id(),
+    accountId: accountId(),
+    name: text("name").notNull(),
+    status: text("status", { enum: ["scheduled", "sending", "done", "canceled"] }).notNull().default("scheduled"),
+    /** Bots que enviam (cada pessoa recebe uma vez só, pelo bot em que falou por último). */
+    botIds: jsonb("bot_ids").$type<string[]>().notNull().default([]),
+    audience: jsonb("audience").$type<BroadcastAudience>().notNull(),
+    content: jsonb("content").$type<BroadcastContent>().notNull(),
+    scheduledAt: ts("scheduled_at").notNull(),
+    startedAt: ts("started_at"),
+    finishedAt: ts("finished_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("broadcasts_account_status").on(t.accountId, t.status, t.scheduledAt)],
+);
+
+export const broadcastRecipients = pgTable(
+  "broadcast_recipients",
+  {
+    id: id(),
+    broadcastId: uuid("broadcast_id")
+      .notNull()
+      .references(() => broadcasts.id, { onDelete: "cascade" }),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    botId: uuid("bot_id")
+      .notNull()
+      .references(() => bots.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["pending", "sending", "sent", "failed", "blocked"] }).notNull().default("pending"),
+    error: text("error"),
+    sentAt: ts("sent_at"),
+  },
+  (t) => [uniqueIndex("broadcast_recipients_one").on(t.broadcastId, t.customerId), index("broadcast_recipients_status").on(t.broadcastId, t.status)],
 );
 
 // ───────────────────────── Importação e auditoria ─────────────────────────

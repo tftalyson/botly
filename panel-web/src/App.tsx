@@ -11,6 +11,7 @@ import { GatewaysPage } from "./pages/gateways";
 import { SettingsPage } from "./pages/settings";
 import { RetentionPage } from "./pages/retention";
 import { RemindersPage } from "./pages/reminders";
+import { BroadcastsPage } from "./pages/broadcasts";
 import { ImportPage } from "./pages/import";
 import { SupportPage } from "./pages/support";
 
@@ -78,6 +79,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
           <NavLink to="/pagamentos">Formas de pagamento</NavLink>
           <NavLink to="/retencao">Retenção</NavLink>
           <NavLink to="/lembretes">Lembretes</NavLink>
+          <NavLink to="/transmissoes">Transmissões</NavLink>
           <NavLink to="/importar">Importar assinantes</NavLink>
           <div className="nav-group">Em seguida</div>
           <span>
@@ -112,6 +114,7 @@ function Shell({ me, onLogout }: { me: Me; onLogout: () => void }) {
             <Route path="/configuracoes" element={<SettingsPage />} />
             <Route path="/retencao" element={<RetentionPage />} />
             <Route path="/lembretes" element={<RemindersPage />} />
+            <Route path="/transmissoes" element={<BroadcastsPage />} />
             <Route path="/importar" element={<ImportPage />} />
             <Route path="/atendimento" element={<SupportPage />} />
             <Route path="/atendimento/:id" element={<SupportPage />} />

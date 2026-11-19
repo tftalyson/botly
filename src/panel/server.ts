@@ -17,6 +17,7 @@ import { gatewayClient } from "../payments/gateway.js";
 import { dashboard, funnelPeople, FUNNEL_STEPS, type FunnelStep, type RangeKey } from "./dashboard.js";
 import { analyze, applyImport, suggestPlans } from "../domain/importer.js";
 import { FILE_ERR, IMPORT_SOURCES, sourceById } from "../domain/import-sources.js";
+import { audienceRows, broadcastStats } from "../domain/broadcast.js";
 import { ensureRecoveryTemplates } from "../domain/recovery.js";
 import { ensureTemplates, pendingRemovals, planOutbox, retentionWindow } from "../domain/retention.js";
 import { agentReply, assume, closeTicket, customerTrail, isSupportOpen, supportHours } from "../domain/support.js";
@@ -621,6 +622,97 @@ export function buildPanel(ctx: Ctx, opts: { webDir?: string; secureCookies?: bo
 
   app.delete<{ Params: { id: string } }>("/api/bundles/:id", async (req) => {
     await db.delete(s.bundles).where(and(eq(s.bundles.id, req.params.id), eq(s.bundles.accountId, acc(req))));
+    return { ok: true };
+  });
+
+  // ─── Transmissões (mailing) ───
+
+  const audienceBody = z.object({
+    segment: z.enum(["all", "active", "expired", "never"]),
+    channelId: z.string().uuid().nullish(),
+    channelMode: z.enum(["has", "hasnt"]).optional(),
+    expiringDays: z.number().int().min(1).max(365).nullish(),
+  });
+  const broadcastBody = z.object({
+    name: z.string().trim().max(80).optional(),
+    botIds: z.array(z.string().uuid()).min(1).max(20),
+    audience: audienceBody,
+    content: z.object({
+      text: z.string().trim().min(1).max(4000),
+      media: z.object({ type: z.enum(["photo", "video", "animation"]), mediaId: z.string().uuid().nullish(), url: z.string().url().max(500).nullish() }).nullish(),
+      button: z
+        .object({
+          kind: z.enum(["none", "plans", "url", "offer"]),
+          label: z.string().trim().max(60).optional(),
+          url: z.string().url().max(500).optional(),
+          planId: z.string().uuid().optional(),
+          discountPct: z.number().int().min(0).max(90).optional(),
+          validMinutes: z.number().int().min(1).max(10080).optional(),
+        })
+        .nullish(),
+    }),
+    /** Vazio = enviar agora. */
+    scheduledAt: z.string().datetime().nullish(),
+  });
+  const myBots = async (req: FastifyRequest, ids: string[]) => {
+    const rows = await db.select().from(s.bots).where(and(eq(s.bots.accountId, acc(req)), inArray(s.bots.id, ids)));
+    if (rows.length !== new Set(ids).size) throw new HttpError(400, "Escolha apenas bots da sua conta.");
+    return rows;
+  };
+
+  app.post("/api/broadcasts/audience", async (req) => {
+    const p = z.object({ botIds: z.array(z.string().uuid()).max(20), audience: audienceBody }).parse(req.body);
+    if (p.botIds.length) await myBots(req, p.botIds);
+    const rows = await audienceRows(ctx, acc(req), p.botIds, p.audience);
+    return { count: rows.length };
+  });
+
+  app.get("/api/broadcasts", async (req) => {
+    const rows = await db.select().from(s.broadcasts).where(eq(s.broadcasts.accountId, acc(req))).orderBy(desc(s.broadcasts.scheduledAt)).limit(100);
+    const out = [];
+    for (const b of rows) out.push({ id: b.id, name: b.name, status: b.status, scheduledAt: b.scheduledAt, startedAt: b.startedAt, finishedAt: b.finishedAt, audience: b.audience, botIds: b.botIds, button: b.content.button?.kind ?? "none", stats: await broadcastStats(ctx, b.id) });
+    return { broadcasts: out };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/broadcasts/:id", async (req) => {
+    const b = (await db.select().from(s.broadcasts).where(and(eq(s.broadcasts.id, req.params.id), eq(s.broadcasts.accountId, acc(req)))))[0];
+    if (!b) throw notFound("Transmissão");
+    return { ...b, stats: await broadcastStats(ctx, b.id) };
+  });
+
+  app.post("/api/broadcasts", async (req) => {
+    const p = broadcastBody.parse(req.body);
+    const bots = await myBots(req, p.botIds);
+    const btn = p.content.button;
+    if (btn?.kind === "url" && !btn.url) throw new HttpError(400, "Informe o link do botão.");
+    if (btn?.kind === "offer") {
+      if (bots.length !== 1) throw new HttpError(400, "A oferta com plano e desconto só funciona com um bot escolhido.");
+      const plan = btn.planId ? (await db.select().from(s.plans).where(and(eq(s.plans.id, btn.planId), eq(s.plans.botId, bots[0]!.id), eq(s.plans.active, true))))[0] : undefined;
+      if (!plan) throw new HttpError(400, "Escolha um plano ativo deste bot para a oferta.");
+    }
+    if (p.audience.channelId) {
+      const ch = (await db.select({ id: s.channels.id }).from(s.channels).where(and(eq(s.channels.id, p.audience.channelId), eq(s.channels.accountId, acc(req)))))[0];
+      if (!ch) throw new HttpError(400, "Canal não encontrado.");
+    }
+    if (p.content.media?.mediaId) {
+      const m = (await db.select({ id: s.media.id }).from(s.media).where(and(eq(s.media.id, p.content.media.mediaId), eq(s.media.accountId, acc(req)))))[0];
+      if (!m) throw new HttpError(400, "Arquivo de mídia não encontrado.");
+    }
+    if (p.content.media && p.content.text.length > 1024) throw new HttpError(400, "Com imagem ou vídeo, o texto pode ter no máximo 1024 caracteres (limite do Telegram).");
+    const when = p.scheduledAt ? new Date(p.scheduledAt) : ctx.now();
+    const at = when.getTime() < ctx.now().getTime() ? ctx.now() : when;
+    const name = p.name || `Transmissão de ${at.toLocaleDateString("pt-BR", { timeZone: DEFAULT_TZ })}`;
+    const [row] = await db.insert(s.broadcasts).values({ accountId: acc(req), name, botIds: p.botIds, audience: p.audience, content: p.content, scheduledAt: at }).returning();
+    return row;
+  });
+
+  app.post<{ Params: { id: string } }>("/api/broadcasts/:id/cancel", async (req) => {
+    const [row] = await db
+      .update(s.broadcasts)
+      .set({ status: "canceled", finishedAt: ctx.now() })
+      .where(and(eq(s.broadcasts.id, req.params.id), eq(s.broadcasts.accountId, acc(req)), inArray(s.broadcasts.status, ["scheduled", "sending"])))
+      .returning();
+    if (!row) throw notFound("Transmissão em andamento");
     return { ok: true };
   });
 

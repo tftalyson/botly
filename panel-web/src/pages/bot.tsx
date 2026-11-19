@@ -609,7 +609,7 @@ function ChatPreview({ bot, plans, channelTitle }: { bot: BotDetail; plans: Plan
 }
 
 /** Imagem/vídeo da boas-vindas: enviar arquivo (com os limites do Telegram) ou usar um link. */
-function MediaPicker({ value, onChange }: { value: Media | null; onChange: (m: Media | null) => void }) {
+export function MediaPicker({ value, onChange, label }: { value: Media | null; onChange: (m: Media | null) => void; label?: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [linkMode, setLinkMode] = useState(!!value?.url && !value?.mediaId);
@@ -630,7 +630,7 @@ function MediaPicker({ value, onChange }: { value: Media | null; onChange: (m: M
   }
   return (
     <div className="field">
-      Imagem ou vídeo de demonstração
+      {label ?? "Imagem ou vídeo de demonstração"}
       <small>Foto (JPG, PNG, WEBP) até 10 MB, ou vídeo (MP4, MOV) e GIF até 50 MB. Esses são os limites do Telegram para bots.</small>
       <div className="row" style={{ alignItems: "flex-start" }}>
         {src && (

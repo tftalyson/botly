@@ -4,6 +4,7 @@ import * as s from "../db/schema.js";
 import type { Ctx } from "../domain/context.js";
 import { checkCharge } from "../domain/sales.js";
 import { cutExpired, planOutbox, sendDue } from "../domain/retention.js";
+import { broadcastTick } from "../domain/broadcast.js";
 import { recoveryTick } from "../domain/recovery.js";
 import { announcePaid } from "../bot/notify.js";
 import type { BotlyRuntime } from "../bot/runtime.js";
@@ -66,5 +67,20 @@ export function startTicks(ctx: Ctx, rt: BotlyRuntime) {
     if (n % 5 === 1) await step("corte", () => cutExpired(ctx, rt));
     running = false;
   }, 60_000);
-  return () => clearInterval(timer);
+  // Transmissões têm o próprio relógio: um envio grande não atrasa os lembretes.
+  let bcRunning = false;
+  const bcTimer = setInterval(async () => {
+    if (bcRunning) return;
+    bcRunning = true;
+    try {
+      await broadcastTick(ctx, rt);
+    } catch (err) {
+      ctx.log.error({ step: "transmissões", err: String(err) }, "erro nas transmissões");
+    }
+    bcRunning = false;
+  }, 10_000);
+  return () => {
+    clearInterval(timer);
+    clearInterval(bcTimer);
+  };
 }

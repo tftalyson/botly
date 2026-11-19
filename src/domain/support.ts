@@ -131,6 +131,8 @@ export async function customerTrail(ctx: Ctx, accountId: string, customerId: str
       case "paid": return "Pagou";
       case "renewed": return "Renovou";
       case "underpaid": return `Pagou valor diferente (${typeof m.paidCents === "number" ? (m.paidCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "?"} em vez de ${typeof m.expectedCents === "number" ? (m.expectedCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "?"})`;
+      case "broadcast_sent": return "Recebeu uma transmissão";
+      case "broadcast_clicked": return "Clicou na oferta da transmissão";
       case "postsale_offered": return `Recebeu a oferta pós-venda${m.discountPct ? ` (${m.discountPct}% de desconto)` : ""}`;
       case "postsale_clicked": return "Clicou na oferta pós-venda";
       case "recovery_sent": return `Recebeu lembrete de Pix não pago${m.discountPct ? ` (${m.discountPct}% de desconto)` : ""}`;

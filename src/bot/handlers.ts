@@ -537,6 +537,38 @@ export function installHandlers(bot: Bot, ctx: Ctx, botId: string, rt: BotlyRunt
     await pay(c, L, order.id, { fromMenu: true });
   });
 
+  // ───────────── Oferta de uma transmissão ─────────────
+  // bo:<transmissão>. O plano, o desconto e o prazo vêm da transmissão (não do botão); o prazo conta da hora do envio.
+  bot.callbackQuery(/^bo:(.+)$/, async (c) => {
+    await c.answerCallbackQuery();
+    const L = await load();
+    const { customer } = await who(c, L);
+    const bc = (await ctx.db.select().from(s.broadcasts).where(and(eq(s.broadcasts.id, c.match[1]!), eq(s.broadcasts.accountId, L.account.id))))[0];
+    const btn = bc?.content.button;
+    if (!bc || btn?.kind !== "offer" || !btn.planId) return;
+    const rec = (await ctx.db.select().from(s.broadcastRecipients).where(and(eq(s.broadcastRecipients.broadcastId, bc.id), eq(s.broadcastRecipients.customerId, customer.id))))[0];
+    if (!rec) return;
+    await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "broadcast_clicked", meta: { broadcastId: bc.id } });
+    const until = rec.sentAt ? rec.sentAt.getTime() + (btn.validMinutes ?? 60) * 60_000 : 0;
+    if (btn.validMinutes && until < ctx.now().getTime()) {
+      await show(c, "⏰ Essa oferta já expirou. Toque em /start para ver os planos.");
+      return;
+    }
+    const plan = (await ctx.db.select().from(s.plans).where(and(eq(s.plans.id, btn.planId), eq(s.plans.botId, botId), eq(s.plans.active, true))))[0];
+    if (!plan) return plansScreen(c);
+    const channelId = L.bot.mainChannelId;
+    if (!channelId) return plansScreen(c);
+    const items: OrderItem[] = [{ type: "plan", refId: plan.id, name: plan.name, channelIds: [channelId], durationUnit: plan.durationUnit, durationValue: plan.durationValue, priceCents: plan.priceCents }];
+    const discountCents = btn.discountPct ? Math.round((plan.priceCents * btn.discountPct) / 100) : 0;
+    const kind = (await activeAccess(ctx, customer.id, channelId)) ? "renewal" : "new";
+    const source = `bc:${bc.id}`;
+    const order =
+      (await reusableOrder(ctx, customer.id, botId, (o) => o.source === source && o.kind === kind && o.discountCents === discountCents && o.items[0]?.refId === plan.id)) ??
+      (await createOrder(ctx, { accountId: L.account.id, botId, customerId: customer.id, kind, items, discountCents, source }));
+    await logEvent(ctx, { accountId: L.account.id, botId, customerId: customer.id, type: "chose_plan", meta: { planId: plan.id, broadcastId: bc.id } });
+    await pay(c, L, order.id, { fromMenu: true });
+  });
+
   // ───────────── Renovação pelos botões do lembrete ─────────────
 
   /** Pedido de renovação do mesmo plano (opcionalmente com canal extra ou desconto). */
