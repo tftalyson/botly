@@ -185,10 +185,11 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
 
   // Série por dia (ou por mês, em períodos longos).
   const byMonth = len > 95 * 86_400_000;
-  const bucket = byMonth ? "month" : "day";
+  const byHour = len <= 25 * 3_600_000; // um dia só: mostra hora a hora
+  const bucket: "hour" | "day" | "month" = byHour ? "hour" : byMonth ? "month" : "day";
   const series = await db
     .select({
-      day: sql<string>`to_char(date_trunc(${sql.raw(`'${bucket}'`)}, ${s.orders.paidAt} at time zone ${tz}), 'YYYY-MM-DD')`,
+      day: sql<string>`to_char(date_trunc(${sql.raw(`'${bucket}'`)}, ${s.orders.paidAt} at time zone ${tz}), ${sql.raw(byHour ? `'HH24'` : `'YYYY-MM-DD'`)})`,
       kind: s.orders.kind,
       cents: sql<number>`sum(${s.orders.totalCents})::int`,
       n: sql<number>`count(*)::int`,
@@ -197,20 +198,25 @@ export async function dashboard(db: Db, accountId: string, now: Date, tz: string
     .where(and(eq(s.orders.accountId, accountId), fOrders(bf), eq(s.orders.status, "paid"), gte(s.orders.paidAt, from), lt(s.orders.paidAt, to)))
     .groupBy(sql`1`, s.orders.kind);
   const days: { day: string; newCents: number; renewalCents: number; bundleCents: number; count: number }[] = [];
-  {
+  const pushRow = (key2: string) => {
+    const rows = series.filter((r) => r.day === key2);
+    days.push({
+      day: key2,
+      newCents: rows.filter((r) => r.kind !== "renewal" && r.kind !== "bundle").reduce((x, r) => x + r.cents, 0),
+      renewalCents: rows.filter((r) => r.kind === "renewal").reduce((x, r) => x + r.cents, 0),
+      bundleCents: rows.filter((r) => r.kind === "bundle").reduce((x, r) => x + r.cents, 0),
+      count: rows.reduce((x, r) => x + r.n, 0),
+    });
+  };
+  if (byHour) {
+    for (let h = 0; h < 24; h++) pushRow(String(h).padStart(2, "0"));
+  } else {
     const z = zoned(from, tz);
     let d = { year: z.year, month: z.month, day: byMonth ? 1 : z.day };
     for (let i = 0; i < 400; i++) {
       const key2 = `${d.year}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`;
       if (atLocal(d.year, d.month, d.day, "00:00", tz) >= to) break;
-      const rows = series.filter((r) => r.day === key2);
-      days.push({
-        day: key2,
-        newCents: rows.filter((r) => r.kind !== "renewal" && r.kind !== "bundle").reduce((x, r) => x + r.cents, 0),
-        renewalCents: rows.filter((r) => r.kind === "renewal").reduce((x, r) => x + r.cents, 0),
-        bundleCents: rows.filter((r) => r.kind === "bundle").reduce((x, r) => x + r.cents, 0),
-        count: rows.reduce((x, r) => x + r.n, 0),
-      });
+      pushRow(key2);
       d = byMonth ? { year: d.month === 12 ? d.year + 1 : d.year, month: d.month === 12 ? 1 : d.month + 1, day: 1 } : addDays(d.year, d.month, d.day, 1);
     }
   }

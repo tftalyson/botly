@@ -29,7 +29,7 @@ interface Numbers {
   avgTicket: number | null;
 }
 interface Dash {
-  range: { key: RangeKey; from: string; to: string; bucket: "day" | "month" };
+  range: { key: RangeKey; from: string; to: string; bucket: "hour" | "day" | "month" };
   current: Numbers;
   previous: Numbers | null;
   series: { day: string; newCents: number; renewalCents: number; bundleCents: number; count: number }[];
@@ -424,7 +424,7 @@ function Funnel({ steps, onPick }: { steps: { step: string; n: number }[]; onPic
 }
 
 /** Colunas empilhadas por dia (ou mês): vendas novas, renovações e pacotes. */
-function RevenueChart({ series, bucket }: { series: Dash["series"]; bucket: "day" | "month" }) {
+function RevenueChart({ series, bucket }: { series: Dash["series"]; bucket: "hour" | "day" | "month" }) {
   const [hover, setHover] = useState<number | null>(null);
   const [table, setTable] = useState(false);
   const W = 1000;
@@ -438,18 +438,23 @@ function RevenueChart({ series, bucket }: { series: Dash["series"]; bucket: "day
   const band = (W - pad.l - pad.r) / n;
   const bw = Math.min(24, Math.max(3, band * 0.6));
   const y = (v: number) => pad.t + (H - pad.t - pad.b) * (1 - v / top);
+  const unitName = bucket === "month" ? "mês" : bucket === "hour" ? "hora" : "dia";
   const label = (day: string) => {
+    if (bucket === "hour") return `${Number(day)}h`;
     const [yy, mm, dd] = day.split("-");
     return bucket === "month" ? `${mm}/${yy!.slice(2)}` : `${dd}/${mm}`;
   };
-  const every = Math.ceil(n / 10);
+  const every = bucket === "hour" ? 2 : Math.ceil(n / 10);
   const total = totals.reduce((a, b) => a + b, 0);
+  const peak = bucket === "hour" ? series.reduce<Dash["series"][number] | null>((best, r) => (!best || r.newCents + r.renewalCents + r.bundleCents > best.newCents + best.renewalCents + best.bundleCents ? r : best), null) : null;
   return (
     <div>
       <div className="panel-head" style={{ marginBottom: 8 }}>
         <div>
-          <h2>Faturamento por {bucket === "month" ? "mês" : "dia"}</h2>
-          <p>{brl(total)} no período</p>
+          <h2>Faturamento por {unitName}</h2>
+          <p>
+            {brl(total)} no período{peak && peak.count > 0 ? ` · hora mais quente: ${Number(peak.day)}h às ${Number(peak.day) + 1}h (${peak.count} ${peak.count === 1 ? "venda" : "vendas"}, ${brl(peak.newCents + peak.renewalCents + peak.bundleCents)})` : ""}
+          </p>
         </div>
         <div className="row">
           <div className="legend">
@@ -470,7 +475,7 @@ function RevenueChart({ series, bucket }: { series: Dash["series"]; bucket: "day
           <table className="rank">
             <thead>
               <tr>
-                <th>{bucket === "month" ? "Mês" : "Dia"}</th>
+                <th>{bucket === "month" ? "Mês" : bucket === "hour" ? "Hora" : "Dia"}</th>
                 {SERIES.map((s) => (
                   <th key={s.key} className="num">
                     {s.label}
@@ -499,7 +504,7 @@ function RevenueChart({ series, bucket }: { series: Dash["series"]; bucket: "day
       ) : (
         <div className="scroll-x">
         <div className="chart-wrap" onMouseLeave={() => setHover(null)}>
-          <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label={`Faturamento por ${bucket === "month" ? "mês" : "dia"}`}>
+          <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img" aria-label={`Faturamento por ${unitName}`}>
             {ticks.map((t) => (
               <g key={t}>
                 <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} className="grid" />
@@ -540,7 +545,7 @@ function RevenueChart({ series, bucket }: { series: Dash["series"]; bucket: "day
           </svg>
           {hover != null && series[hover] && (
             <div className="tip" style={{ left: `${((pad.l + band * hover + band / 2) / W) * 100}%` }}>
-              <b>{label(series[hover]!.day)}</b>
+              <b>{bucket === "hour" ? `${Number(series[hover]!.day)}h às ${Number(series[hover]!.day) + 1}h` : label(series[hover]!.day)}</b>
               {SERIES.map((s) => (
                 <div key={s.key}>
                   <i style={{ background: s.color }} />

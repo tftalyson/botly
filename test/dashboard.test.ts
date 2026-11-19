@@ -88,6 +88,14 @@ describe("dashboard", () => {
     expect(d.planRank[0]!.name).toBe("Mensal");
   });
 
+  it("um dia só: gráfico hora a hora (24 pontos) com o mesmo total", async () => {
+    const d = await dashboard(db, accountId, now, TZ, "today", undefined, [botId]);
+    expect(d.range.bucket).toBe("hour");
+    expect(d.series.length).toBe(24);
+    expect(d.series[0]!.day).toBe("00");
+    expect(d.series.reduce((x, r) => x + r.newCents + r.renewalCents + r.bundleCents, 0)).toBe(d.current.revenueCents);
+    expect(d.series.reduce((x, r) => x + r.count, 0)).toBe(d.current.sales);
+  });
   it("7 dias: série diária com 7 pontos e ranking de bots", async () => {
     const d = await dashboard(db, accountId, now, TZ, "7d", undefined, [botId]);
     expect(d.series.length).toBe(7);
